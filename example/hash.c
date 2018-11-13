@@ -10,7 +10,7 @@
 
 
 struct sha1sum_ctx {
-	EVP_MD_CTX ctx;
+	EVP_MD_CTX *ctx;
 	const EVP_MD *md;
 	uint8_t *salt;
 	size_t len;
@@ -23,7 +23,10 @@ struct sha1sum_ctx * sha1sum_create(const uint8_t *salt, size_t len) {
 		goto err;
 	}
 	bzero(csm, sizeof(*csm));
-	EVP_MD_CTX_init(&csm->ctx);
+	csm->ctx = EVP_MD_CTX_new();
+	if (!csm->ctx) {
+		goto err;
+	}
 	csm->md = EVP_sha1();
 	csm->len = len;
 	if (len > 0) {
@@ -54,25 +57,25 @@ struct sha1sum_ctx * sha1sum_create(const uint8_t *salt, size_t len) {
 }
 
 int sha1sum_update(struct sha1sum_ctx *csm, const uint8_t *payload, size_t len) {
-	return EVP_DigestUpdate(&csm->ctx, payload, len) != 1;
+	return EVP_DigestUpdate(csm->ctx, payload, len) != 1;
 }
 
 int sha1sum_finish(struct sha1sum_ctx *csm, const uint8_t *payload, size_t len, uint8_t *out) {
 	int ret = 1;
 	if (len) {
-		ret = EVP_DigestUpdate(&csm->ctx, payload, len);
+		ret = EVP_DigestUpdate(csm->ctx, payload, len);
 	}
 	if (ret == 1) {
-		return EVP_DigestFinal_ex(&csm->ctx, out, NULL) != 1;
+		return EVP_DigestFinal_ex(csm->ctx, out, NULL) != 1;
 	} else {
 		return 1;
 	}
 }
 
 int sha1sum_reset(struct sha1sum_ctx *csm) {
-	EVP_DigestInit_ex(&csm->ctx, csm->md, NULL);
+	EVP_DigestInit_ex(csm->ctx, csm->md, NULL);
 	if (csm->len) {
-		return EVP_DigestUpdate(&csm->ctx, csm->salt, csm->len) != 1;
+		return EVP_DigestUpdate(csm->ctx, csm->salt, csm->len) != 1;
 	} else {
 		return 0;
 	}
@@ -80,7 +83,7 @@ int sha1sum_reset(struct sha1sum_ctx *csm) {
 }
 
 int sha1sum_destroy(struct sha1sum_ctx *csm) {
-	EVP_MD_CTX_cleanup(&csm->ctx);
+	EVP_MD_CTX_destroy(csm->ctx);
 	free(csm->salt);
 	bzero(csm, sizeof(*csm));
 	free(csm);
