@@ -59,6 +59,9 @@ hashing functions provided by us.
 You can download the official BitTorrent client at http://www.bittorrent.com/.
 This is the client you should use as a protocol reference (via
 Wireshark/tcpdump packet captures) and for comparison in your experiments.
+On Linux, where this client is not available, you can use Transmission,
+which is installed by default in Ubuntu, or any other client that your
+distribution provides.
 
 ## Grading
 
