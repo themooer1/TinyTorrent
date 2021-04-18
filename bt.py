@@ -8,50 +8,6 @@ from urllib.request import Request, urlencode, urlopen
 
 PEER_ID_LEN = 20
 
-class TrackerFailureException(Exception):
-    pass
- 
-class TrackerEvent(Enum):
-    STARTED = 'started'
-    COMPLETED = 'completed'
-    STOPPED = 'stopped'
-    EMPTY = 'empty'
-
-
-class TrackerRequest:
-    def __init__(self, announce_url, info_hash, peer_id, ip, port, uploaded, downloaded, left, event: TrackerEvent = None):
-        self.announce_url = announce_url
-        self.params = {
-            'info_hash': info_hash,
-            'peer_id': peer_id,
-            'ip': ip,
-            'port': port,
-            'uploaded': uploaded,
-            'downloaded': downloaded,
-            'left': left,
-            'compact': 1
-        }
-
-        if event:
-            self.params['event'] = event
-
-    @staticmethod
-    def decode_compact_response(resp_data: bytes) -> list[Peer]:
-        
-
-    def send(self):
-        eparams = urlencode(self.params).encode('utf-8')
-        
-        with urlopen(self.announce_url, data=eparams) as resp:
-            rdata = resp.read().decode()
-            if self.params['compact'] == 0:
-                try:
-                    return bdecode(resp)
-                except:
-                    return self.decode_compact_response(resp)
-
-
-
 
 class Torrent:
     def __init__(self, filename):
@@ -83,12 +39,6 @@ class Torrent:
     def download_size(self):
         return self.length
 
-
-class Peer:
-    def __init__(self, pid, choked=True, interested=False):
-        self.pid = pid
-        self.choked = choked
-        self.interested = interested
 
 
 

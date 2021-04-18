@@ -1,12 +1,13 @@
 from abc import ABC, abstractmethod
 from enum import Enum
-from struct import calcsize, pack, Struct
+from struct import calcsize, pack, unpack, Struct
 from typing import Union
 
 from bitfield import Bitfield
 from storage import Piece, Request
 
-class BittorrentPacketDeserializeException(ValueError):
+
+class MalformedPacketException(ValueError):
     pass
 
 
@@ -40,10 +41,6 @@ class BittorrentPacket:
 def SingletonPacket(name: str, packet_type: BittorrentPacketType, byte_repr: bytes):
     byte_repr_len = len(byte_repr)
 
-    def singleton_pkt_deserialize(buf: bytes):
-        if not buf.startswith(byte_repr):
-            raise BittorrentPacketDeserializeException(f'Expected to read a {name} \
-                consisting of {byte_repr}, but got {buf}')
         
 
     singleton_pkt_class = type(
@@ -52,12 +49,21 @@ def SingletonPacket(name: str, packet_type: BittorrentPacketType, byte_repr: byt
         {
             '__len__': lambda *args: byte_repr_len,  # *args allow len(cls) and len(instance)
             'type': packet_type,
-            'serialize': lambda self: byte_repr
+            'serialize': lambda self: byte_repr,
+            # 'deserialize': singleton_pkt_deserialize  # ADDED BELOW (needs singleton_pkt_instance)
         }
     )
 
     singleton_pkt_instance = singleton_pkt_class()
     setattr(singleton_pkt_class, '__new__', lambda cls: singleton_pkt_instance)
+
+    def singleton_pkt_deserialize(buf: bytes):
+        if not buf.startswith(byte_repr):
+            raise MalformedPacketException(f'Expected to read a {name} \
+                consisting of {byte_repr}, but got {buf}')
+        return singleton_pkt_instance
+
+    setattr(singleton_pkt_class, 'deserialize', singleton_pkt_deserialize)
 
     return singleton_pkt_class
 
@@ -86,12 +92,22 @@ UninterestedPacket = NoPayloadPacket(name='UninterestedPacket', packet_type=Bitt
 
 class HavePacket(BittorrentPacket):
     type = BittorrentPacketType.HAVE
+    bspec = Struct('!LBL')
 
     def __init__(self, piece_index):
         self.completed_piece_index = piece_index
 
     def serialize(self):
-        return pack('!LB', self.completed_piece_index)
+        return self.bspec.pack(self.bspec.size, self.type.value, self.completed_piece_index)
+
+    @classmethod
+    def deserialize(cls, buf: bytes) -> "HavePacket":
+        length, ptype, piece_index = cls.bspec.unpack_from(buf)
+
+        if length == cls.bspec.size - 4 and ptype == cls.type.value:
+            return cls(piece_index)
+        
+        raise MalformedPacketException(f'Error decoding {cls.__name__}')
 
 
 class BitfieldPacket(BittorrentPacket):
@@ -103,6 +119,16 @@ class BitfieldPacket(BittorrentPacket):
 
     def serialize(self):
         return self.bspec.pack(len(self.bitfield) + 1, self.type.value) + bytes(self.bitfield)
+    
+    @classmethod
+    def deserialize(cls, buf: bytes) -> "BitfieldPacket":
+        length, ptype = cls.bspec.unpack_from(buf)
+        bitfield = buf[cls.bspec.size:]
+
+        if ptype == cls.type.value:
+            return cls(bitfield)
+        
+        raise MalformedPacketException(f'Error decoding {cls.__name__}')
 
 
 class RequestPacket(BittorrentPacket, Request):
@@ -122,6 +148,15 @@ class RequestPacket(BittorrentPacket, Request):
             self.begin_offset,
             self.length
         )
+    
+    @classmethod
+    def deserialize(cls, buf: bytes) -> "RequestPacket":
+        length, ptype, piece_index, begin_offset, piece_length = cls.bspec.unpack_from(buf)
+
+        if length == cls.bspec.size - 4 and ptype == cls.type.value:
+            return cls(piece_index, begin_offset, piece_length)
+        
+        raise MalformedPacketException(f'Error decoding {cls.__name__}')
 
     def index(self) -> int:
         return self.piece_index
@@ -150,6 +185,16 @@ class PiecePacket(BittorrentPacket, Piece):
             self.begin_offset,
             self.data
         )
+    
+    @classmethod
+    def deserialize(cls, buf: bytes) -> "PiecePacket":
+        length, ptype, piece_index, begin_offset = cls.bspec.unpack_from(buf)
+        data = buf[cls.bspec.size:]
+
+        if length == cls.bspec.size - 4 and ptype == cls.type.value:
+            return cls(piece_index, begin_offset, data)
+        
+        raise MalformedPacketException(f'Error decoding {cls.__name__}')
 
     def index(self) -> int:
         return self.piece_index
@@ -161,27 +206,13 @@ class PiecePacket(BittorrentPacket, Piece):
         return self.data
 
 
-class CancelPacket(BittorrentPacket):
+class CancelPacket(BittorrentPacket, PiecePacket):
     type = BittorrentPacketType.CANCEL
-    bspec = Struct('!LBLLL')
-
-    def __init__(self, piece_index: int, begin_offset: int, length: int):
-        self.piece_index = piece_index
-        self.begin_offset = begin_offset
-        self.length = length
-
-    def serialize(self):
-        return self.bspec.pack(
-            self.bspec.size,
-            self.type,
-            self.piece_index,
-            self.begin_offset,
-            self.length
-        )
 
 
 class ExtendedPacket(BittorrentPacket):
     type = BittorrentPacketType.EXTENDED
+    
 
 
 
