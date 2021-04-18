@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 
 from bitfield import MutableBitfield
 from storage import Piece, Request
+from torrent import Torrent
 
 class PeerFinder(ABC):
 
@@ -11,10 +12,13 @@ class PeerFinder(ABC):
 
 
 class Peer:
-    def __init__(self, swarm: Swarm, pid, num_pieces: int, choked=True, interested=False):
-        self.pid = pid
+    def __init__(self, swarm: Swarm, choked=True, interested=False):
+        self.swarm = swarm
+        self.pid = pid # TODO: set this when connection is made
         self.choked = choked
         self.interested = interested
+
+        num_pieces = swarm.get_torrent().num_pieces()
         self.bitfield = MutableBitfield(bytearray(num_pieces))
     
     def has_index(self, index: int) -> bool:
@@ -34,7 +38,17 @@ class Peer:
 
 class Swarm:
     def __init__(self, torrent: Torrent, finder: PeerFinder):
-        self.peers = []
+        self.peers = finder.get_peers()
         # Nothing else made it clear who was sending to whom XD
         self.peers_im_downloading_from = []
         self.peers_im_sending_to = {}
+
+        self.torrent = torrent
+
+    def get_torrent(self) -> Torrent:
+        return self.torrent
+
+    def request_piece(self, r: Request):
+        pass
+
+

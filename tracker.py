@@ -12,6 +12,7 @@ class TrackerEvent(Enum):
 
 class Tracker(PeerFinder):
 
+    def __init__(self, announce_url, info_hash, peer_id, ip, port, uploaded, downloaded, left, event: TrackerEvent = None):
 
     def get_peers(self):
         pass
@@ -44,7 +45,6 @@ class TrackerRequest:
         chunks = (resp_data[s:s + 6] for s in range(0, len(resp_data), 6))
 
         peers = []
-    
         
 
     def send(self):

@@ -12,6 +12,7 @@ class MalformedPacketException(ValueError):
 
 
 class BittorrentPacketType(Enum):
+    HANDSHAKE = -2
     KEEPALIVE = -1 # No type sent, length 0
     CHOKE = 0
     UNCHOKE = 1

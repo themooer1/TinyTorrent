@@ -33,6 +33,16 @@ class Request(ABC):
         pass
 
 
+class PieceStore(ABC):
+    @abstractmethod
+    def get_piece(self, piece: Union[int, Piece, Request]):
+        pass
+
+    @abstractmethod
+    def store_piece(self, p: Piece):
+        pass
+
+
 def piece_to_index(piece):
     if issubclass(piece, int):
         index = piece
@@ -41,7 +51,16 @@ def piece_to_index(piece):
     else:
         raise ValueError("Argument, 'piece', must be an int or support the 'index()' method")
 
-class TorrentFile():
+    
+
+def length_to_pieces(length_in_bytes: int, piece_size_in_bytes: int):
+    '''
+    Returns how many pieces it would take to hash length_in_bytes bytes
+    '''
+    return (length_in_bytes // piece_size_in_bytes) + (-length_in_bytes % piece_size_in_bytes)
+
+
+class TorrentFile(PieceStore):
     def __init__(self, piece_size: int, length: int, path: str, piece_hashes: iterable[bytes]):
         self.length = length
         self.piece_size = piece_size
@@ -61,6 +80,7 @@ class TorrentFile():
         f.truncate(size)
 
     def __close__(self):
+        self.finalize()
         self.file_on_disk.close()
     
     def have(self, index: Union[int, Piece, Request]):
@@ -151,6 +171,9 @@ class TorrentFile():
                 self.__verify(p)
 
                 self.__unlock(p)
+    
+    def finalize(self):
+        self.file.truncate(self.length)
                
 
     # def flush(self):
