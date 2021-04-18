@@ -22,8 +22,8 @@ class Bitfield:
 
 
 class MutableBitfield(Bitfield):
-    def __init__(self, bitfield: Union[bytes, bytearray]):
-        if type(bitfield) == bytes:
+    def __init__(self, bitfield: Union[int, bytes, bytearray]):
+        if type(bitfield) != bytearray:
             self.bitfield = bytearray(bitfield)
         self.bitfield = bitfield
 

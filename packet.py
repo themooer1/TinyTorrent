@@ -12,6 +12,7 @@ class MalformedPacketException(ValueError):
 
 
 class BittorrentPacketType(Enum):
+    KEEPALIVE = -1 # No type sent, length 0
     CHOKE = 0
     UNCHOKE = 1
     INTERESTED = 2
@@ -22,6 +23,39 @@ class BittorrentPacketType(Enum):
     PIECE = 7
     CANCEL = 8
     EXTENDED = 14
+
+class BittorrentPacketHeader:
+    len_bspec = Struct('!L')
+    type_bspec = Struct('B')
+
+    def __init__(self, length, ptype: BittorrentPacketType):
+        self.length = length
+        self.type = ptype
+
+    @classmethod
+    def __len__(cls):
+        return cls.len_bspec.size + cls.type_bspec.size
+
+    @classmethod
+    def deserialize(cls, buf: bytes):
+        length, = cls.len_bspec.unpack(buf)
+        
+        if length == 0:
+            ptype = BittorrentPacketType.KEEPALIVE
+        else:
+            ptype, = cls.type_bspec.unpack(buf[cls.len_bspec:])
+
+        return cls(
+            length,
+            BittorrentPacketType(ptype)
+        )
+    
+    def body_length(self):
+        return self.length
+
+    def type(self):
+        return self.type
+    
 
 class BittorrentPacket:
     @abstractmethod
@@ -42,7 +76,6 @@ def SingletonPacket(name: str, packet_type: BittorrentPacketType, byte_repr: byt
     byte_repr_len = len(byte_repr)
 
         
-
     singleton_pkt_class = type(
         name,
         (BittorrentPacket,),  # TODO: consider adding SingletonPacket as parent class
@@ -58,9 +91,6 @@ def SingletonPacket(name: str, packet_type: BittorrentPacketType, byte_repr: byt
     setattr(singleton_pkt_class, '__new__', lambda cls: singleton_pkt_instance)
 
     def singleton_pkt_deserialize(buf: bytes):
-        if not buf.startswith(byte_repr):
-            raise MalformedPacketException(f'Expected to read a {name} \
-                consisting of {byte_repr}, but got {buf}')
         return singleton_pkt_instance
 
     setattr(singleton_pkt_class, 'deserialize', singleton_pkt_deserialize)
@@ -78,6 +108,9 @@ def NoPayloadPacket(name: str, packet_type: BittorrentPacketType):
 # Peer Messages
 
 # Choke:: length: 1, type: 0
+KeepalivePacket = SingletonPacket('KeepalivePacket', -1, b'')
+
+# Choke:: length: 1, type: 0
 ChokePacket = NoPayloadPacket(name='ChokePacket', packet_type=BittorrentPacketType.CHOKE) 
 
 # Unchoke:: length: 1, type: 1
@@ -93,6 +126,7 @@ UninterestedPacket = NoPayloadPacket(name='UninterestedPacket', packet_type=Bitt
 class HavePacket(BittorrentPacket):
     type = BittorrentPacketType.HAVE
     bspec = Struct('!LBL')
+    body_bspec = Struct('!L')
 
     def __init__(self, piece_index):
         self.completed_piece_index = piece_index
@@ -102,12 +136,10 @@ class HavePacket(BittorrentPacket):
 
     @classmethod
     def deserialize(cls, buf: bytes) -> "HavePacket":
-        length, ptype, piece_index = cls.bspec.unpack_from(buf)
+        piece_index, = cls.body_bspec.unpack_from(buf)
 
-        if length == cls.bspec.size - 4 and ptype == cls.type.value:
-            return cls(piece_index)
+        return cls(piece_index)
         
-        raise MalformedPacketException(f'Error decoding {cls.__name__}')
 
 
 class BitfieldPacket(BittorrentPacket):
@@ -122,18 +154,13 @@ class BitfieldPacket(BittorrentPacket):
     
     @classmethod
     def deserialize(cls, buf: bytes) -> "BitfieldPacket":
-        length, ptype = cls.bspec.unpack_from(buf)
-        bitfield = buf[cls.bspec.size:]
-
-        if ptype == cls.type.value:
-            return cls(bitfield)
-        
-        raise MalformedPacketException(f'Error decoding {cls.__name__}')
+        return cls(bitfield=buf)
 
 
 class RequestPacket(BittorrentPacket, Request):
     type = BittorrentPacketType.REQUEST
     bspec = Struct('!LBLLL')
+    body_bspec = Struct('!LLL')
 
     def __init__(self, piece_index: int, begin_offset: int, length: int):
         self.piece_index = piece_index
@@ -151,13 +178,10 @@ class RequestPacket(BittorrentPacket, Request):
     
     @classmethod
     def deserialize(cls, buf: bytes) -> "RequestPacket":
-        length, ptype, piece_index, begin_offset, piece_length = cls.bspec.unpack_from(buf)
+        piece_index, begin_offset, piece_length = cls.bspec.unpack(buf)
 
-        if length == cls.bspec.size - 4 and ptype == cls.type.value:
-            return cls(piece_index, begin_offset, piece_length)
+        return cls(piece_index, begin_offset, piece_length)
         
-        raise MalformedPacketException(f'Error decoding {cls.__name__}')
-
     def index(self) -> int:
         return self.piece_index
 
@@ -171,6 +195,7 @@ class RequestPacket(BittorrentPacket, Request):
 class PiecePacket(BittorrentPacket, Piece):
     type = BittorrentPacketType.PIECE
     bspec = Struct('!LBLL')
+    body_bspec = Struct('!LL')
 
     def __init__(self, piece_index: int, begin_offset: int, data: bytes):
         self.piece_index = piece_index
@@ -188,13 +213,11 @@ class PiecePacket(BittorrentPacket, Piece):
     
     @classmethod
     def deserialize(cls, buf: bytes) -> "PiecePacket":
-        length, ptype, piece_index, begin_offset = cls.bspec.unpack_from(buf)
-        data = buf[cls.bspec.size:]
+        piece_index, begin_offset = cls.bspec.unpack(buf)
+        data = buf[cls.body_bspec.size:]
 
-        if length == cls.bspec.size - 4 and ptype == cls.type.value:
-            return cls(piece_index, begin_offset, data)
-        
-        raise MalformedPacketException(f'Error decoding {cls.__name__}')
+        return cls(piece_index, begin_offset, data)
+
 
     def index(self) -> int:
         return self.piece_index
@@ -215,25 +238,38 @@ class ExtendedPacket(BittorrentPacket):
     
 
 
+PACKETS_BY_TYPE: dict[BittorrentPacketType, BittorrentPacket] = {
+    BittorrentPacketType.CHOKE: ChokePacket,
+    BittorrentPacketType.UNCHOKE: UnchokePacket,
+    BittorrentPacketType.INTERESTED: InterestedPacket,
+    BittorrentPacketType.UNINTERESTED: UninterestedPacket,
+    BittorrentPacketType.HAVE: HavePacket,
+    BittorrentPacketType.BITFIELD: BitfieldPacket,
+    BittorrentPacketType.REQUEST: RequestPacket,
+    BittorrentPacketType.PIECE: PiecePacket,
+    BittorrentPacketType.CANCEL: CancelPacket
+}
 
 @coroutine
 def read_next_packet(reader: StreamReader):
 
     try:
         # Read header to get length
-        header_bytes = yield from reader.readexactly(PacketHeader.sizeof())
-        header: PacketHeader = PacketHeader.parse(header_bytes)
+        header_bytes = yield from reader.readexactly(len(BittorrentPacketHeader))
+        header: BittorrentPacketHeader = BittorrentPacketHeader.deserialize(header_bytes)
+
+
 
         # Read inner packet
-        pkt_len = 1 + header.packet_length  # Include 1 byte opcode prefix
-        next_packet_bytes = yield from reader.readexactly(pkt_len)
-        opcode = next_packet_bytes[0]
-        next_packet = OPCODES[opcode].parse(next_packet_bytes)
+        pkt_len = header.packet_length
+        next_packet_body = yield from reader.readexactly(pkt_len)
+        next_packet = PACKETS_BY_TYPE[header.type()].deserialize(next_packet_body)
 
         return next_packet
 
-    except IncompleteReadError or CError as e:
-        raise MalformedPacketException()
+    except Exception as e:
+        print(e)
+        raise MalformedPacketException(e)
 
 
 @coroutine

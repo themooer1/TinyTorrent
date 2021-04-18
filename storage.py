@@ -71,22 +71,27 @@ class TorrentFile():
 
         return self.verified_pieces.get(index)
     
-    def lookup_hash(self, p: Union[int, Request, Piece]):
+    def __lookup_hash(self, p: Union[int, Request, Piece]):
         index = piece_to_index(p)
 
         return self.piece_hashes[index]
             
-    def is_locked(self, piece: Union[int, Piece, Request]):
+    def __is_locked(self, piece: Union[int, Piece, Request]):
         index = piece_to_index(piece)
 
         return self.locked_pieces.get(index)
 
-    def lock(self, piece: Union[int, Piece, Request]):
+    def __lock(self, piece: Union[int, Piece, Request]):
         index = piece_to_index(piece)
 
         self.locked_pieces.set(index)
+
+    def __unlock(self, piece: Union[int, Piece, Request]):
+        index = piece_to_index(piece)
+
+        self.locked_pieces.unset(index)
     
-    def verify(self, piece: Union[int, Piece, Request]):
+    def __verify(self, piece: Union[int, Piece, Request]):
         data = piece.data()
 
         # If we haven't the whole piece, load it from disk
@@ -102,18 +107,12 @@ class TorrentFile():
         d = h.digest()
 
         # Check checksum
-        if d == self.lookup_hash(piece):
+        if d == self.__lookup_hash(piece):
 
             # Mark verified!
             index = piece_to_index(piece)
             self.verified_pieces.set(index)
 
-
-
-    def unlock(self, piece: Union[int, Piece, Request]):
-        index = piece_to_index(piece)
-
-        self.locked_pieces.unset(index)
 
     def offset_to_piece_index(self, offset: int):
         return offset // self.piece_size
@@ -136,9 +135,9 @@ class TorrentFile():
     
     def store_piece(self, p: Piece):
         if not self.have(p.index()):
-            if not self.is_locked(p):
+            if not self.__is_locked(p):
                 # Stop other threads from writing this piece
-                self.lock(p)
+                self.__lock(p)
 
                 # Calculate write offset of piece in file
                 s_offset = self.piece_index_to_offset(p.index())
@@ -149,9 +148,9 @@ class TorrentFile():
                 self.file_on_disk.write(p.data())
 
                 # Verify piece
-                self.verify(p)
+                self.__verify(p)
 
-                self.unlock(p)
+                self.__unlock(p)
                
 
     # def flush(self):
