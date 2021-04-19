@@ -20,6 +20,9 @@ class Bitfield:
             yield self.bitfield[i] >> 1 & 1
             yield self.bitfield[i] & 1
 
+    def __len__(self):
+        return len(self.bitfield) * 8
+
 
 class MutableBitfield(Bitfield):
     def __init__(self, bitfield: Union[int, bytes, bytearray]):

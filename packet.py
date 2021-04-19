@@ -10,7 +10,6 @@ from storage import Piece, Request
 class MalformedPacketException(ValueError):
     pass
 
-
 class BittorrentPacketType(Enum):
     HANDSHAKE = -2
     KEEPALIVE = -1 # No type sent, length 0
@@ -25,7 +24,15 @@ class BittorrentPacketType(Enum):
     CANCEL = 8
     EXTENDED = 14
 
+# Special packet only sent once at beginning
+class HandshakePacket:
+    brepr = b'\x19BitTorrent protocol'
+
+    def serialize(self) -> bytes:
+        return self.brepr
+
 class BittorrentPacketHeader:
+    bspec = Struct('!LB')
     len_bspec = Struct('!L')
     type_bspec = Struct('B')
 
@@ -36,6 +43,9 @@ class BittorrentPacketHeader:
     @classmethod
     def __len__(cls):
         return cls.len_bspec.size + cls.type_bspec.size
+
+    def serialize(self) -> bytes:
+        self.bspec.pack(self.length, self.type.value)
 
     @classmethod
     def deserialize(cls, buf: bytes):
@@ -131,6 +141,9 @@ class HavePacket(BittorrentPacket):
 
     def __init__(self, piece_index):
         self.completed_piece_index = piece_index
+    
+    def piece_index(self):
+        return self.completed_piece_index
 
     def serialize(self):
         return self.bspec.pack(self.bspec.size, self.type.value, self.completed_piece_index)
@@ -149,6 +162,9 @@ class BitfieldPacket(BittorrentPacket):
 
     def __init__(self, bitfield: bytes):
         self.bitfield = Bitfield(bitfield)
+    
+    def bitfield(self):
+        return self.bitfield
 
     def serialize(self):
         return self.bspec.pack(len(self.bitfield) + 1, self.type.value) + bytes(self.bitfield)
@@ -171,7 +187,7 @@ class RequestPacket(BittorrentPacket, Request):
     def serialize(self):
         return self.bspec.pack(
             self.bspec.size,
-            self.type,
+            self.type.value,
             self.piece_index,
             self.begin_offset,
             self.length
@@ -182,6 +198,9 @@ class RequestPacket(BittorrentPacket, Request):
         piece_index, begin_offset, piece_length = cls.bspec.unpack(buf)
 
         return cls(piece_index, begin_offset, piece_length)
+
+    def request(self) -> Request:
+        return self
         
     def index(self) -> int:
         return self.piece_index
@@ -206,7 +225,7 @@ class PiecePacket(BittorrentPacket, Piece):
     def serialize(self):
         return self.bspec.pack(
             self.bspec.size + len(self.data),
-            self.type,
+            self.type.value,
             self.piece_index,
             self.begin_offset,
             self.data
@@ -219,6 +238,8 @@ class PiecePacket(BittorrentPacket, Piece):
 
         return cls(piece_index, begin_offset, data)
 
+    def piece(self) -> Piece:
+        return self
 
     def index(self) -> int:
         return self.piece_index
@@ -274,12 +295,8 @@ def read_next_packet(reader: StreamReader):
 
 
 @coroutine
-def send_packet(writer: StreamWriter, packet: CStruct):
-    body = packet.serialize()
-    size_without_opcode = len(body) - 1
-    header = PacketHeader(packet_length=size_without_opcode).serialize()
-
-    writer.write(header + body)
+def send_packet(writer: StreamWriter, packet: BittorrentPacket):
+    writer.write(packet.serialize())
     yield from writer.drain()
 
 

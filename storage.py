@@ -6,6 +6,14 @@ from packet import PiecePacket, RequestPacket
 
 
 class Piece(ABC):
+    def __eq__(self, other):
+        if issubclass(other, Request):
+            return self.index == other.index() and self.begin_offset() == other.begin_offset() and self.data() == other.data()
+        return False
+
+    def __hash__(self):
+        return self.index() * 19 + self.begin_offset()
+
     @abstractmethod
     def index(self) -> int:
         pass
@@ -20,6 +28,15 @@ class Piece(ABC):
 
 
 class Request(ABC):
+
+    def __eq__(self, other):
+        if issubclass(other, Request):
+            return self.index == other.index() and self.begin_offset() == other.begin_offset() and self.length() == other.length()
+        return False
+
+    def __hash__(self):
+        return self.index() * 19 + self.begin_offset()
+
     @abstractmethod
     def index(self) -> int:
         pass

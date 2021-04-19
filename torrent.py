@@ -74,6 +74,14 @@ class Torrent(PieceStore):
     def get_piece(self, piece: Union[int, Piece, Request]):
         index = piece_to_index(piece)
         return self.get_piece_by_index(index)
+        
+    def has_piece_by_index(self, index: int):
+        f: TorrentFile = get_file_containing_piece(index)
+        return f.have(index)
+
+    def has_piece(self, piece: Union[int, Piece, Request]):
+        index = piece_to_index(piece)
+        return self.has_piece_by_index(index)
 
     def store_piece(self, piece: Piece):
         f: TorrentFile = self.get_file_containing_piece(piece.index())
@@ -84,6 +92,9 @@ class Torrent(PieceStore):
 
     def num_pieces(self) -> int:
         len(self.get_pieces())
+    
+    def piece_length(self) -> int:
+        return self.piece_length
                 
     def announce_url(self):
         return self.announce_url
