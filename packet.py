@@ -4,7 +4,7 @@ from struct import calcsize, pack, unpack, Struct
 from typing import Union
 
 from bitfield import Bitfield
-from storage import Piece, Request
+from storage import Block, Request
 
 
 class MalformedPacketException(ValueError):
@@ -20,7 +20,7 @@ class BittorrentPacketType(Enum):
     HAVE = 4
     BITFIELD = 5
     REQUEST = 6
-    PIECE = 7
+    BLOCK = 7  #bep_0003 calls this a 'piece' but 
     CANCEL = 8
     EXTENDED = 14
 
@@ -174,61 +174,50 @@ class BitfieldPacket(BittorrentPacket):
         return cls(bitfield=buf)
 
 
-class RequestPacket(BittorrentPacket, Request):
+class RequestPacket(BittorrentPacket):
     type = BittorrentPacketType.REQUEST
     bspec = Struct('!LBLLL')
     body_bspec = Struct('!LLL')
 
-    def __init__(self, piece_index: int, begin_offset: int, length: int):
-        self.piece_index = piece_index
-        self.begin_offset = begin_offset
-        self.length = length
+    def __init__(self, r: Request):
+        self.req: Request = r
 
     def serialize(self):
         return self.bspec.pack(
             self.bspec.size,
             self.type.value,
-            self.piece_index,
-            self.begin_offset,
-            self.length
+            self.req.index(),
+            self.req.begin_offset(),
+            self.req.length()
         )
     
     @classmethod
     def deserialize(cls, buf: bytes) -> "RequestPacket":
         piece_index, begin_offset, piece_length = cls.bspec.unpack(buf)
 
-        return cls(piece_index, begin_offset, piece_length)
+        return cls(
+            Request(piece_index, begin_offset, piece_length)
+        )
 
     def request(self) -> Request:
-        return self
-        
-    def index(self) -> int:
-        return self.piece_index
-
-    def begin_offset(self) -> int:
-        return self.begin_offset
-
-    def length(self) -> int:
-        return self.length
+        return self.req
     
 
-class PiecePacket(BittorrentPacket, Piece):
-    type = BittorrentPacketType.PIECE
+class BlockPacket(BittorrentPacket):
+    type = BittorrentPacketType.BLOCK
     bspec = Struct('!LBLL')
     body_bspec = Struct('!LL')
 
-    def __init__(self, piece_index: int, begin_offset: int, data: bytes):
-        self.piece_index = piece_index
-        self.begin_offset = begin_offset
-        self.data = data
+    def __init__(self, b: Block):
+        self.block: Block = b
 
     def serialize(self):
         return self.bspec.pack(
             self.bspec.size + len(self.data),
             self.type.value,
-            self.piece_index,
-            self.begin_offset,
-            self.data
+            self.block.index(),
+            self.block.begin_offset(),
+            self.block.data()
         )
     
     @classmethod
@@ -236,19 +225,12 @@ class PiecePacket(BittorrentPacket, Piece):
         piece_index, begin_offset = cls.bspec.unpack(buf)
         data = buf[cls.body_bspec.size:]
 
-        return cls(piece_index, begin_offset, data)
+        return cls(
+            Block(piece_index, begin_offset, data)
+        )
 
-    def piece(self) -> Piece:
-        return self
-
-    def index(self) -> int:
-        return self.piece_index
-
-    def begin_offset(self) -> int:
-        return self.begin_offset
-
-    def data(self) -> bytes:
-        return self.data
+    def block(self) -> Block:
+        return self.piece
 
 
 class CancelPacket(BittorrentPacket, PiecePacket):

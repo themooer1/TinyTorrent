@@ -4,11 +4,11 @@ import random
 import time
 
 from abc import ABC, abstractmethod
-from asyncio import coroutine, open_connection, sleep, StreamReader, StreamWriter
+from asyncio import coroutine, open_connection, Semaphore, sleep, StreamReader, StreamWriter
 
 from bitfield import MutableBitfield
-from packet import HandshakePacket, KeepalivePacket, ChokePacket, UnchokePacket, InterestedPacket, UninterestedPacket, HavePacket, BitfieldPacket, PiecePacket, RequestPacket, CancelPacket, read_next_packet, send_packet
-from storage import Piece, Request
+from packet import HandshakePacket, KeepalivePacket, ChokePacket, UnchokePacket, InterestedPacket, UninterestedPacket, HavePacket, BitfieldPacket, BlockPacket, RequestPacket, CancelPacket, read_next_packet, send_packet
+from storage import Block, PieceManager, Request
 from tracker import Peer, PeerFinder
 from torrent import Torrent
 
@@ -41,6 +41,10 @@ class SwarmPeer:
 
     def peer_id(self):
         return self.pid
+
+    @coroutine
+    def connect(self):
+        pkt = HandshakePacket(self.peer_id(), self.swarm.torrent.info_hash())
 
     @coroutine
     def choke_and_notify(self):
@@ -103,35 +107,25 @@ class SwarmPeer:
         '''Is the PEER interested in our data'''
         return self.peer_interested
 
-    def has_index(self, index: int) -> bool:
+    def has_piece(self, index: int) -> bool:
         return self.bitfield.get(index)
-
-    def has(self, piece: Union[int, Piece, Request]) -> bool:
-        if issubclass(piece, Piece) or issubclass(piece, Request):
-            index = piece.index()
-        else:
-            index = piece
-        
-        return self.has_index(index)
 
     @coroutine
     def request_piece(self, r: Request):
-        pkt = RequestPacket(
-            piece_index = r.index(),
-            begin_offset = r.begin_offset(),
-            length = r.length()
-        )
+        pkt = RequestPacket(r)
 
         yield from self.send_packet(pkt)
     
 
     @coroutine
-    def send_piece(self, p: Piece):
-        pkt = PiecePacket(
-            piece_index = p.index(),
-            begin_offset = p.begin_offset(),
-            data = p.data()
-        )
+    def send_piece(self, b: Block):
+        pkt = BlockPacket(b)
+
+        yield from self.send_packet(pkt)
+
+    @coroutine
+    def send_have(self, piece_index: int):
+        pkt = HavePacket(piece_index)
 
         yield from self.send_packet(pkt)
 
@@ -151,76 +145,39 @@ class SwarmPeer:
             pass
 
         elif issubclass(pkt, ChokePacket):
-            self.choking = True
+            self.peer_choking = True
         
         elif issubclass(pkt, UnchokePacket):
-            self.choking = False
+            self.peer_choking = False
         
         elif issubclass(pkt, InterestedPacket):
-            self.interested = True
+            self.peer_interested = True
 
         elif issubclass(pkt, UninterestedPacket):
-            self.interested = False
+            self.peer_interested = False
         
         elif issubclass(pkt, HavePacket):
             self.bitfield.set(pkt.piece_index())
 
         elif issubclass(pkt, BitfieldPacket):
             assert len(pkt.bitfield()) == self.swarm.torrent.num_pieces()
-            self.bitfield = pkt.bitfield()
+            self.bitfield = MutableBitfield(pkt.bitfield())
         
-        
-
-        
-        #o.w. hand off to swarm's read_next_packet
-        
+        # Otherwise hand off to swarm's read_next_packet
         return self, pkt
-
-
-class ManualRequest(Request):
-    def __init__(self, index: int, begin_offset: int, length: int):
-        self.index = index
-        self.begin_offset = begin_offset
-        self.length = length
-
-    def index(self) -> int:
-        return self.index
-
-    def begin_offset(self) -> int:
-        return self.begin_offset
-    
-    def length(self) -> int:
-        return self.length
-
-
-class SimpleRequest(ManualRequest):
-    def __init__(self, index: int, length: int):
-        self.index = index
-        self.length = length
-    
-    @override
-    def begin_offset(self) -> int:
-        return 0
-    
-    @override
-    def length(self) -> int:
-        return self.length
-
 
 
 class Swarm:
     MAX_ACTIVE_PEERS = 30
-    MAX_OUTSTANDING_PIECES = 30
+    MAX_OUTSTANDING_REQUESTS = 30
 
-    def __init__(self, torrent: Torrent, finder: PeerFinder, piece_request_timeout = 5):
-        self.bounties = dict()  # Pieces currently being awaited
-        self.pieces_to_download = asyncio.Queue(torrent.num_pieces())
-
+    def __init__(self, torrent: Torrent, manager: PieceManager, finder: PeerFinder, piece_request_timeout = 5):
         self.my_pid = generate_peer_id()
-        self.peers = finder.get_peers()
-        # Nothing else made it clear who was sending to whom XD
-        self.peers_im_downloading_from = []
-        self.peers_im_sending_to = {}  # Map<peer_id -> SwarmPeer>
+        self.outstanding_requests = Semaphore(self.MAX_OUTSTANDING_REQUESTS)
+        self.peers: list[SwarmPeer] = finder.get_peers()
+        self.peers_not_choking_me: list[SwarmPeer] = []
+
+        self.piece_manager: PieceManager = manager
 
         self.request_timeout = piece_request_timeout
 
@@ -233,32 +190,32 @@ class Swarm:
 
         p = SwarmPeer(self, reader, writer)
         self.peers.append(p)
+
+    def peers_with_piece(self, piece_index: int):
+        return [p for p in self.peers_not_choking_me if p.has_piece(piece_index)]
     
-    def get_torrent(self) -> Torrent:
-        return self.torrent
+    def random_peer_with_piece(self, piece_index: int):
+        return random.choice(self.peers_with_piece(piece_index))
 
+    def reset_outstanding_requests(self):
+        self.outstanding_requests = Semaphore(self.MAX_OUTSTANDING_REQUESTS)
+    
     @coroutine
-    def request_next_piece(self):
-        r = yield from self.pieces_to_download.get()
-        request_fulfilled = asyncio.Condition()
-        self.bounties[r] = request_fulfilled
+    def request_pieces(self):
+        for request in self.piece_manager.requests():
+            request: Request = Request
 
-        peers_with_piece = list(filter(self.peers_im_downloading_from.values(), lambda p: p.has(r)))
-        for peer_to_ask in random.shuffle(peers_with_piece):
-            yield from peer_to_ask.request_piece(r)
+            peer_to_ask: SwarmPeer = self.random_peer_with_piece(request.index())
+
+            yield from peer_to_ask.request_piece(request)
 
             try:
-                asyncio.wait_for(request_fulfilled, timeout=self.request_timeout)
-                return  # The piece was received and stored, so stop asking
+                asyncio.wait_for(self.outstanding_requests.acquire(), timeout=self.request_timeout)
+
             except asyncio.TimeoutError:
-                print(f'Peer {peer_to_ask.peer_id()} timed out on piece index {r.index()}.')
+                # Consider all outstanding requests timed out
+                self.reset_outstanding_requests()
         
-        # Try again later
-        self.bounties.pop(r)
-        yield from self.pieces_to_download.put(r)
-
-        # TODO: put back on queue in 
-
 
     @coroutine
     def handle_incoming(self):
@@ -299,11 +256,19 @@ class Swarm:
                         # Re-notify peer we are choking
                         peer.choke()
                 
-                elif issubclass(pkt, PiecePacket):
-                    self.torrent.store_piece(pkt.piece())
-                    self.pieces_to_download.task_done()
-                    yield from self.bounties[pkt.index()].notify()
-                        
+                elif issubclass(pkt, BlockPacket):
+                    try:
+                        self.torrent.store_piece(pkt.piece())
+                        yield from self.bounties[pkt.index()].notify()
+                        yield from self.send_haves(pkt)
+                    except PieceVerificationException:
+                        print(f'Failed to validate idx {pkt.index()} from {peer.peer_id()}')
+
+    @coroutine
+    def send_haves(self, p: Block):
+        yield from asyncio.gather(
+            (peer.send_have(p) for peer in self.peers)
+        )
     
     @coroutine
     def send_keepalives_forever(self):
@@ -333,26 +298,45 @@ class Swarm:
     def handle_incomming_connections(self):
         yield from asyncio.start_server(self.accept_peer_connection, host=None, port=PEER_PORT)
 
+
     @coroutine
     def request_all_pieces(self):
         pieces_to_get = list(range(0, self.torrent.num_pieces()))
         random.shuffle(pieces_to_get)
 
-    
         for index in pieces_to_get:
             # Will pause as necessary in request_piece
-            self.pieces_to_download.put_nowait(
+            yield from self.pieces_to_download.put(
                 SimpleRequest(
                     index = index,
                     length = self.torrent.piece_length()
                 )
             )
+
+        while self.pieces_to_download.qsize() > 0:
+            yield from asyncio.gather(
+                self.MAX_OUTSTANDING_PIECES * [self.request_next_piece()]
+            )
         
-        yield from self.pieces_to_download.join()
+    @coroutine
+    def control_flow(self):
+        while self.running:
+            self.peers_im_downloading_from = random.choices(
+                peers, 
+                k = MAX_ACTIVE_PEERS
+            )
+            asyncio.sleep(30)
+            
         
     @coroutine
     def start(self):
         '''Completes local files then seeds forever.'''
+        yield from asyncio.gather(
+            self.handle_incomming_connections(),
+            self.request_all_pieces(),
+            self.handle_incomming(),
+            self.send_keepalives_forever(),
+        )
 
 
 
