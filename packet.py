@@ -26,10 +26,37 @@ class BittorrentPacketType(Enum):
 
 # Special packet only sent once at beginning
 class HandshakePacket:
-    brepr = b'\x19BitTorrent protocol'
+    brepr = b'\x19BitTorrent protocol' + 8 * b'\x00'
+    bspec = Struct('B19sQ20s20s')
+
+    def __init__(self, info_hash, peer_id, reserved=0):
+        assert len(info_hash) == len(peer_id) == 20
+        self._info_hash = info_hash
+        self._peer_id = peer_id
+
+    def __len__(self):
+        return self.bspec.size
+
+    def info_hash(self):
+        return self._info_hash
+
+    def peer_id(self):
+        return self._peer_id
+
+    @classmethod
+    def deserialize(cls, buf: bytes) -> HandshakePacket:
+        plen, pstr, reserved, info_hash, peer_id = self.brepr.unpack(buf)
+
+        if plen != 19 or pstr != b'Bittorrent Protocol':
+            raise MalformedPacketException('HandshakePacket did not start with "\\x19Bittorrent Protocol"')
+        
+        return HandshakePacket(
+            info_hash,
+            peer_id
+        )
 
     def serialize(self) -> bytes:
-        return self.brepr
+        return self.brepr + self._info_hash + self._peer_id
 
 class BittorrentPacketHeader:
     bspec = Struct('!LB')
@@ -230,7 +257,7 @@ class BlockPacket(BittorrentPacket):
         )
 
     def block(self) -> Block:
-        return self.piece
+        return self.block
 
 
 class CancelPacket(BittorrentPacket, PiecePacket):
@@ -275,6 +302,13 @@ def read_next_packet(reader: StreamReader):
         print(e)
         raise MalformedPacketException(e)
 
+@coroutine
+def read_handshake_response(reader: StreamReader):
+    handshake_resp_bytes = yield from reader.readexactly(len(HandshakePacket))
+    handshake_resp = HandshakePacket.deserialize(handshake_resp_bytes)
+
+    return handshake_resp
+    
 
 @coroutine
 def send_packet(writer: StreamWriter, packet: BittorrentPacket):

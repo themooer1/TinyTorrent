@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from asyncio import coroutine, open_connection, Semaphore, sleep, StreamReader, StreamWriter
 
 from bitfield import MutableBitfield
-from packet import HandshakePacket, KeepalivePacket, ChokePacket, UnchokePacket, InterestedPacket, UninterestedPacket, HavePacket, BitfieldPacket, BlockPacket, RequestPacket, CancelPacket, read_next_packet, send_packet
+from packet import HandshakePacket, KeepalivePacket, ChokePacket, UnchokePacket, InterestedPacket, UninterestedPacket, HavePacket, BitfieldPacket, BlockPacket, RequestPacket, CancelPacket, read_handshake_response, read_next_packet, send_packet
 from storage import Block, PieceManager, Request
 from tracker import Peer, PeerFinder
 from torrent import Torrent
@@ -18,6 +18,9 @@ PEER_PORT = 7478
 def generate_peer_id() -> bytes:
     '''Generates a random 20 byte peer ID'''
     (''.join(random.choices('1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=20))).encode()
+
+class InfoHashDoesntMatchException(Exception):
+    pass
 
 
 class SwarmPeer:
@@ -45,6 +48,14 @@ class SwarmPeer:
     @coroutine
     def connect(self):
         pkt = HandshakePacket(self.peer_id(), self.swarm.torrent.info_hash())
+        yield from self.send_packet(pkt)
+        resp: HandshakePacket = yield from read_handshake_response(self.reader)
+        
+        sent_info_hash = self.swarm.torrent.info_hash()
+        recv_info_hash = resp.info_hash()
+        if sent_info_hash != recv_info_hash:
+            raise InfoHashDoesntMatchException(f'Sent {}, but got {}')
+
 
     @coroutine
     def choke_and_notify(self):
@@ -118,7 +129,7 @@ class SwarmPeer:
     
 
     @coroutine
-    def send_piece(self, b: Block):
+    def send_block(self, b: Block):
         pkt = BlockPacket(b)
 
         yield from self.send_packet(pkt)
@@ -163,7 +174,7 @@ class SwarmPeer:
             assert len(pkt.bitfield()) == self.swarm.torrent.num_pieces()
             self.bitfield = MutableBitfield(pkt.bitfield())
         
-        # Otherwise hand off to swarm's read_next_packet
+        # hand off to swarm's read_next_packet
         return self, pkt
 
 
@@ -175,7 +186,7 @@ class Swarm:
         self.my_pid = generate_peer_id()
         self.outstanding_requests = Semaphore(self.MAX_OUTSTANDING_REQUESTS)
         self.peers: list[SwarmPeer] = finder.get_peers()
-        self.peers_not_choking_me: list[SwarmPeer] = []
+        self.peers_not_choking_me: set[SwarmPeer] = set()
 
         self.piece_manager: PieceManager = manager
 
@@ -189,6 +200,9 @@ class Swarm:
         reader, writer = yield from open_connection(host, port)
 
         p = SwarmPeer(self, reader, writer)
+        yield from p.connect()
+        yield from p.take_interest_and_notify()
+
         self.peers.append(p)
 
     def peers_with_piece(self, piece_index: int):
@@ -216,6 +230,10 @@ class Swarm:
                 # Consider all outstanding requests timed out
                 self.reset_outstanding_requests()
         
+        assert self.piece_manager.complete()
+        exit(0)
+        
+        
 
     @coroutine
     def handle_incoming(self):
@@ -225,12 +243,13 @@ class Swarm:
                 if issubclass(pkt, KeepalivePacket):
                     pass
 
+
                 # Handled by peer's read_next_packet
-                # elif issubclass(pkt, ChokePacket):
-                #     peer.choke()
+                elif issubclass(pkt, ChokePacket):
+                    self.peers_not_choking_me.discard(peer)
                 
-                # elif issubclass(pkt, UnchokePacket):
-                #     peer.unchoke()
+                elif issubclass(pkt, UnchokePacket):
+                    self.peers_not_choking_me.add(peer)
                                 
                 # elif issubclass(pkt, InterestedPacket):
                 #     self.interested = True
@@ -245,30 +264,30 @@ class Swarm:
                 
                 elif issubclass(pkt, RequestPacket):
                     if not peer.am_choking():
-                        if self.torrent.has_piece(pkt.piece()):
-                            piece = self.torrent.get_piece(pkt.piece())
-                            peer.send_piece(piece)
+                        if self.piece_manager.has_piece(pkt.request().index()):
+                            block = self.piece_manager.get_block(pkt.request())
+                            peer.send_block(block)
                         else:
                             # Refresh peer's knownledge of what we have
                             # bfp = BitfieldPacket()
                             pass
                     else:
                         # Re-notify peer we are choking
-                        peer.choke()
+                        print(f'Peer {peer.peer_id()} requested data when choked.')
+                        peer.choke_and_notify()
                 
                 elif issubclass(pkt, BlockPacket):
-                    try:
-                        self.torrent.store_piece(pkt.piece())
-                        yield from self.bounties[pkt.index()].notify()
-                        yield from self.send_haves(pkt)
-                    except PieceVerificationException:
-                        print(f'Failed to validate idx {pkt.index()} from {peer.peer_id()}')
+                    self.outstanding_requests.release()
+                    self.piece_manager.save_block(pkt.block())
+                    if self.piece_manager.has_piece(pkt.index()):
+                        yield from peer.send_have(pkt.index())
 
-    @coroutine
-    def send_haves(self, p: Block):
-        yield from asyncio.gather(
-            (peer.send_have(p) for peer in self.peers)
-        )
+
+    # @coroutine
+    # def send_haves(self, p: Block):
+    #     yield from asyncio.gather(
+    #         (peer.send_have(p) for peer in self.peers)
+    #     )
     
     @coroutine
     def send_keepalives_forever(self):
@@ -279,7 +298,6 @@ class Swarm:
                 yield from peer.send_packet(pkt)
             
             asyncio.sleep(100)
-
 
     @coroutine
     def accept_peer_connection(self, reader: StreamReader, writer: StreamWriter):
@@ -299,42 +317,14 @@ class Swarm:
         yield from asyncio.start_server(self.accept_peer_connection, host=None, port=PEER_PORT)
 
 
-    @coroutine
-    def request_all_pieces(self):
-        pieces_to_get = list(range(0, self.torrent.num_pieces()))
-        random.shuffle(pieces_to_get)
-
-        for index in pieces_to_get:
-            # Will pause as necessary in request_piece
-            yield from self.pieces_to_download.put(
-                SimpleRequest(
-                    index = index,
-                    length = self.torrent.piece_length()
-                )
-            )
-
-        while self.pieces_to_download.qsize() > 0:
-            yield from asyncio.gather(
-                self.MAX_OUTSTANDING_PIECES * [self.request_next_piece()]
-            )
-        
-    @coroutine
-    def control_flow(self):
-        while self.running:
-            self.peers_im_downloading_from = random.choices(
-                peers, 
-                k = MAX_ACTIVE_PEERS
-            )
-            asyncio.sleep(30)
-            
         
     @coroutine
     def start(self):
         '''Completes local files then seeds forever.'''
         yield from asyncio.gather(
-            self.handle_incomming_connections(),
-            self.request_all_pieces(),
             self.handle_incomming(),
+            self.handle_incomming_connections(),
+            self.request_pieces()
             self.send_keepalives_forever(),
         )
 

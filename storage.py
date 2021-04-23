@@ -115,7 +115,7 @@ class Piece:
         # shuffle(requests)
 
         self.requests = deque(requests)
-        self.completed_blocks = set()
+        self.completed_blocks = list()
 
     def _create_request_list(self):
         '''Create list of requests for blocks needed to complete this piece'''
@@ -155,6 +155,8 @@ class Piece:
         '''True if all blocks have been downloaded.  ¡DOES NOT VERIFY PIECE HASH!'''
         return len(self.completed_blocks) == self.num_blocks
 
+        
+
     def get_downloaded_blocks(self) -> list[Block]:
         '''
         Returns a list of downloaded blocks.
@@ -176,6 +178,7 @@ class Piece:
         if self.valid_block(b) and not self.block_completed(b.begin_offset()):
             self.blocks.append(b)
             self.completed_blocks.add(b.begin_offset())
+
         else:
             print('Invalid block!  (begin_offset not aligned and no request was sent for it)')
 
@@ -234,7 +237,7 @@ class Piece:
 #     '''
 #     return (length_in_bytes // piece_size_in_bytes) + (-length_in_bytes % piece_size_in_bytes)
 
-class PieceWriter:
+class PieceIO:
     '''Writes pieces to a file (or multiple files depending on the torrent)'''
 
     def __init__(self, t: Torrent):
@@ -244,6 +247,50 @@ class PieceWriter:
     def files_for_piece(self):
         '''Returns mapping from offsets in a piece '''
         pass
+
+    def get_block_by_offset(self, begin_offset: int):
+        for block in self.completed_blocks:
+            if block.begin_offset() == begin_offset:
+                return block
+            
+
+    def get_block(self, r: Request) -> Block:
+        assert r.begin_offset <= BLOCK_LEN
+        start_offset = r.index() * self.torrent.piece_length() + r.begin_offset()
+
+        bytes_to_read = r.length()
+        bytes_read = bytearray()
+
+        for f in self.file_from_offset(start_offset):
+            if bytes_to_read <= 0:
+                break
+
+            f: TorrentFile = f
+            fstart_offset = start_offset - f.offset()
+            fbytes_to_read = min(bytes_to_read, f.length())
+
+            f.seek(fstart_offset)
+            bytes_read.extend(f.file().read(fbytes_to_read))
+
+            bytes_to_read -= fbytes_to_read
+
+        assert bytes_to_read == 0
+
+        return Block(
+            piece_index = r.index(), 
+            begin_offset = r.begin_offset(), 
+            data = bytes_read
+        )
+            
+            
+
+    def files_from_offset(self, start_offset):
+        for off, f in self.torrent.end_offsets():
+            # f: TorrentFile = f
+            if off <= start_offset:
+                continue
+
+            yield f
 
     def write(self, p: Piece):
         assert p.complete()
@@ -257,7 +304,7 @@ class PieceWriter:
         filler = fill_file(p.get_downloaded_blocks(), start_offset)
 
         for off, f in self.torrent.end_offsets():
-            f: TorrentFile = f
+            # f: TorrentFile = f
             if off <= start_offset:
                 continue
 
@@ -272,9 +319,9 @@ class PieceManager:
     Manages requesting blocks on pieces, caching them until the piece is complete, and saving the piece
     '''
 
-    def __init__(self, t: Torrent, w: PieceWriter):
+    def __init__(self, t: Torrent, io: PieceIO):
         self.torrent: Torrent = t
-        self.writer: PieceWriter = w
+        self.io: PieceIO = io
 
         self.unfinished_pieces = self.make_piece_dict(t)
         self.finished_pieces = {}
@@ -300,8 +347,11 @@ class PieceManager:
             assert len(self.unfinished_pieces) == 0 
 
         return len(self.finished_pieces) == self.num_pieces
+
+    def get_block(self, r: Request) -> Block:
+        return self.io.get_block(r)
     
-    def have(self, index: int):
+    def has_piece(self, index: int):
         return index in self.finished_pieces
 
     def mark_finished(self, p: Piece):
@@ -316,18 +366,14 @@ class PieceManager:
     def requests(self):
         ''' Generates requests needed to finish all pieces'''
 
-        # For now, just finish one piece at a time
-        for piece in list(self.unfinished_pieces.values()):  # (mark_finished removes piece from unfinished_pieces)
-            piece : Piece = piece
-            r = piece.next_request()
-            while r is not None:
-                yield r
+        while len(self.unfinished_pieces) > 0:
+            # For now, just finish one piece at a time
+            for piece in list(self.unfinished_pieces.values()):  # (mark_finished removes piece from unfinished_pieces)
+                piece : Piece = piece
                 r = piece.next_request()
-
-            assert piece.complete()
-            if piece.verify():
-                self.mark_finished(piece)
-                self.writer.write(piece)
+                while r is not None:
+                    yield r
+                    r = piece.next_request()
 
 
     def save_block(self, b: Block):
@@ -336,6 +382,14 @@ class PieceManager:
         if self.valid_piece_index(idx) and not self.have(idx):
             piece: Piece = self.unfinished_pieces[idx]
             piece.save_block(b)
+
+            if piece.complete():
+                if piece.verify():
+                    self.mark_finished(piece)
+                    self.io.write(piece)
+                else:
+                    print(f'Piece {self.piece.index} failed verification!  Resetting...')
+                    piece.reset()
 
         else:
             print('Block does not correspond to a valid piece.')
