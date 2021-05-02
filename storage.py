@@ -4,7 +4,7 @@ from hashlib import sha1
 from random import shuffle
 
 from bitfield import MutableBitfield
-from packet import PiecePacket, RequestPacket
+# from packet import PiecePacket, RequestPacket
 from torrent import Torrent, TorrentFile
 
 BLOCK_EXP = 14
@@ -17,60 +17,68 @@ class PieceVerificationException(Exception):
 class Request:
 
     def __init__(self, piece_index: int, begin_offset: int, length: int):
-        self.piece_index = piece_index
-        self.begin_offset = begin_offset
-        self.length = length
+        self.piece_idx = piece_index
+        self.begin_off = begin_offset
+        self.leng = length
     
     def __eq__(self, other):
-        if issubclass(other, Request):
-            return self.index == other.index() and self.begin_offset() == other.begin_offset() and self.length() == other.length()
+        if isinstance(other, self.__class__):
+            return self.index() == other.index() and self.begin_offset() == other.begin_offset() and self.length() == other.length()
         return False
     
     def __hash__(self):
         return self.index() * 19 + self.begin_offset()
+
+    def __repr__(self):
+        return f'Request(\n\tpiece_index={self.index()},\n\tbegin_offset={self.begin_offset()},\n\tlength={self.length()}\n)'
         
     def index(self) -> int:
-        return self.piece_index
+        return self.piece_idx
 
     def begin_offset(self) -> int:
-        return self.begin_offset
+        return self.begin_off
 
     def length(self) -> int:
-        return self.length
+        return self.leng
     
 
 class Block:
 
     def __init__(self, piece_index: int, begin_offset: int, data: bytes):
         self.piece_index = piece_index
-        self.begin_offset = begin_offset
-        self.data = data
+        self.begin_off = begin_offset
+        self.dat = data
     
     def __eq__(self, other):
-        if issubclass(other, Block):
-            return self.index == other.index() and self.begin_offset() == other.begin_offset() and self.data() == other.data()
+        if isinstance(other, self.__class__):
+            return self.index() == other.index() and self.begin_offset() == other.begin_offset() and self.data() == other.data()
         return False
 
     def __hash__(self):
         return self.index() * 19 + self.begin_offset()
 
+    def __repr__(self):
+        return f'Block(\n\tpiece_index={self.index()},\n\tbegin_offset={self.begin_offset()},\n\tdata={self.data()}\n)'
+
     def index(self) -> int:
         return self.piece_index
 
     def begin_offset(self) -> int:
-        return self.begin_offset
+        return self.begin_off
 
     def data(self) -> bytes:
-        return self.data
+        return self.dat
 
 
-def fill_file(blocks: iter[Block], start_offset: int = 0):
+# def fill_file(blocks: iter[Block], start_offset: int = 0):
+def fill_file(blocks: iter, start_offset: int = 0):
     ''' Writes blocks into multiple TorrentFiles sent into the generator '''
-    bytes_left_in_file = f.length() - start_offset
+    # bytes_left_in_file = f.length() - start_offset
     bytes_written = 0
 
     # Get first file to fill starting at start_offset
-    dst_file: TorrentFile = yield bytes_written
+    # dst_file: TorrentFile = yield bytes_written
+    dst_file= yield bytes_written
     dst_file.file.seek(start_offset)
     
 
@@ -157,7 +165,8 @@ class Piece:
 
         
 
-    def get_downloaded_blocks(self) -> list[Block]:
+    # def get_downloaded_blocks(self) -> list[Block]:
+    def get_downloaded_blocks(self) -> list:
         '''
         Returns a list of downloaded blocks.
         Includes all blocks ONLY if this.completed()
@@ -328,7 +337,8 @@ class PieceManager:
         self.finished_pieces_bitfield: MutableBitfield = MutableBitfield(len(self.unfinished_pieces))
 
     @staticmethod    
-    def make_piece_dict(self, t: Torrent) -> dict[int, Piece]:
+    # def make_piece_dict(self, t: Torrent) -> dict[int, Piece]:
+    def make_piece_dict(self, t: Torrent) -> dict:
         '''Makes a map from piece_indices to pieces'''
         length = self.torrent.download_length()
 

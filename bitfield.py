@@ -1,13 +1,25 @@
+from typing import Union
+
 
 class Bitfield:
     def __init__(self, bitfield: bytes):
         self.bitfield = bitfield
         self.num_set = None
 
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            if self.bitfield == other.bitfield:
+                assert self.num_set == other.num_set
+                return True
+        return False
+
 
     def get(self, index):
         return (self.bitfield[index // 8] >> (7 - (index % 8))) & 1
     
+    def num_bytes(self):
+        return len(self.bitfield)
+
     def num_set(self):
         return num_set
 

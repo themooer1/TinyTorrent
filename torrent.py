@@ -1,7 +1,7 @@
 from bencode import bencode, bdecode
 from hashlib import sha1
 
-from storage import length_to_pieces, piece_to_index, TorrentFile
+# from storage import length_to_pieces, piece_to_index, TorrentFile
 
 class MalformedTorrentException(Exception):
     pass
@@ -97,7 +97,8 @@ class Torrent:
     def download_length(self) -> int:
         return self.length
 
-    def files(self) -> list[TorrentFile]:
+    # def files(self) -> list[TorrentFile]:
+    def files(self) -> list:
         return self.files
 
     def piece_length(self) -> int:
@@ -126,7 +127,8 @@ class Torrent:
 
         raise ValueError(f"Asked for offset of {file.path()} in a torrent which doesn't contain it.")
 
-    def start_offsets(self) -> dict[int, TorrentFile]:
+    # def start_offsets(self) -> dict[int, TorrentFile]:
+    def start_offsets(self) -> dict:
         '''Returns Map<start_offset, TorrentFile>'''
 
         offset = 0
@@ -137,7 +139,8 @@ class Torrent:
 
         offset += f.length()
 
-    def end_offsets(self) -> dict[int, TorrentFile]:
+    # def end_offsets(self) -> dict[int, TorrentFile]:
+    def end_offsets(self) -> dict:
         '''Returns Map<end_offset, TorrentFile>'''
         return {off + f.length(): f for off, f in self.start_offsets().items()}
 
