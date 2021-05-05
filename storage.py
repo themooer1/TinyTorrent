@@ -13,13 +13,11 @@ BLOCK_LEN = int(1 << 14)
 class PieceVerificationException(Exception):
     pass
 
-
 class Request:
-
     def __init__(self, piece_index: int, begin_offset: int, length: int):
-        self.piece_idx = piece_index
-        self.begin_off = begin_offset
-        self.leng = length
+        self.__piece_idx = piece_index
+        self.__begin_offset = begin_offset
+        self.__length = length
     
     def __eq__(self, other):
         if isinstance(other, self.__class__):
@@ -33,13 +31,13 @@ class Request:
         return f'Request(\n\tpiece_index={self.index()},\n\tbegin_offset={self.begin_offset()},\n\tlength={self.length()}\n)'
         
     def index(self) -> int:
-        return self.piece_idx
+        return self.__piece_idx
 
     def begin_offset(self) -> int:
-        return self.begin_off
+        return self.__begin_offset
 
     def length(self) -> int:
-        return self.leng
+        return self.__length
     
 
 class Block:
@@ -79,7 +77,7 @@ def fill_file(blocks: iter, start_offset: int = 0):
     # Get first file to fill starting at start_offset
     # dst_file: TorrentFile = yield bytes_written
     dst_file= yield bytes_written
-    dst_file.file.seek(start_offset)
+    dst_file.file().seek(start_offset)
     
 
     for b in blocks:
@@ -95,11 +93,11 @@ def fill_file(blocks: iter, start_offset: int = 0):
             if (bbytes_to_write == 0):
                 # If 0, we need a new file
                 dst_file = yield bytes_written
-                dst_file.seek(0)
+                dst_file.file().seek(0)
             
             else:
                 # If > 0, write as many as we can
-                dst_file.write(b.data()[bytes_written: bytes_written + bbytes_to_write])
+                dst_file.file().write(b.data()[bytes_written: bytes_written + bbytes_to_write])
                 bytes_written += bbytes_to_write
 
     return bytes_written
@@ -113,24 +111,33 @@ class Piece:
         self.num_blocks = length // BLOCK_LEN
         last_block_len = length % BLOCK_LEN
         if last_block_len > 0:
-            num_blocks += 1
+            self.num_blocks += 1
 
         # Reset downloaded blocks and requests
         self.reset()
+
+    def __repr__(self):
+        return f'Piece(\n\tpiece_index={self.index},\n\tchecksum={self.checksum},\n\tlength={self.length}\n\tnum_blocks={self.num_blocks}\n\tcompleted_blocks={self.completed_blocks}\n)'
+            
+    def reset(self):
+        '''Clear all downloaded blocks, and regenerate block requests'''
+        self._init_request_list()
+        self.downloaded_blocks = []
 
     def _init_request_list(self):
         requests = self._create_request_list()
         # shuffle(requests)
 
         self.requests = deque(requests)
-        self.completed_blocks = list()
+        self.completed_blocks = []
 
     def _create_request_list(self):
         '''Create list of requests for blocks needed to complete this piece'''
         requests: list[Request] = []
+        last_block_len = self.length % BLOCK_LEN
 
         # Create block requests
-        for begin_offset in range(0, length, BLOCK_LEN):
+        for begin_offset in range(0, self.length - last_block_len, BLOCK_LEN):
             r = Request(
                 self.index,
                 begin_offset,
@@ -139,7 +146,6 @@ class Piece:
             requests.append(r)
 
         # Create last request when BLOCK_LEN doesn't divide PIECE_LEN
-        last_block_len = length % BLOCK_LEN
         if last_block_len > 0:
             r = Request(
                 piece_index = self.index,
@@ -149,7 +155,13 @@ class Piece:
             requests.append(r)
 
         # Double Check That Loop!
-        assert len(self.requests) == self.num_blocks
+        if len(requests) != self.num_blocks:
+            print(self.length)
+            print(last_block_len)
+            print(len(requests))
+            print(self.num_blocks)
+            print(requests)
+            assert False
 
         return requests
 
@@ -185,8 +197,8 @@ class Piece:
             
     def save_block(self, b: Block):
         if self.valid_block(b) and not self.block_completed(b.begin_offset()):
-            self.blocks.append(b)
-            self.completed_blocks.add(b.begin_offset())
+            self.downloaded_blocks.append(b)
+            self.completed_blocks.append(b.begin_offset())
 
         else:
             print('Invalid block!  (begin_offset not aligned and no request was sent for it)')
@@ -195,7 +207,11 @@ class Piece:
         self.downloaded_blocks.sort(key=lambda b: b.begin_offset())
 
     def valid_block(self, b: Block):
-        return b.begin_offset() % BLOCK_LEN == 0
+        def is_last_block(b: Block):
+            return b.begin_offset() + len(b.data()) == self.length 
+        return \
+            b.begin_offset() % BLOCK_LEN == 0 and \
+                (len(b.data()) == BLOCK_LEN or is_last_block(b))
     
     def verify(self):
         self.sort_blocks()
@@ -213,12 +229,6 @@ class Piece:
 
         
         return checksum.digest() == self.checksum
-        
-    def reset(self):
-        '''Clear all downloaded blocks, and regenerate block requests'''
-        self._init_request_list()
-        self.downloaded_blocks = []
-
 
 # class PieceStore(ABC):
 #     @abstractmethod
@@ -251,7 +261,7 @@ class PieceIO:
 
     def __init__(self, t: Torrent):
         self.torrent: Torrent = t
-        self.path = path
+        # self.path = path
     
     def files_for_piece(self):
         '''Returns mapping from offsets in a piece '''
@@ -291,8 +301,6 @@ class PieceIO:
             data = bytes_read
         )
             
-            
-
     def files_from_offset(self, start_offset):
         for off, f in self.torrent.end_offsets():
             # f: TorrentFile = f
@@ -305,22 +313,70 @@ class PieceIO:
         assert p.complete()
         assert p.verify()
 
-
         start_offset = p.index * self.torrent.piece_length()
-        bytes_to_write = p.length
         bytes_written = 0
 
-        filler = fill_file(p.get_downloaded_blocks(), start_offset)
+        out_files = self.files_from_offset(start_offset)
+        current_file: TorrentFile = next(out_files)
+        offset_in_file = start_offset - current_file.offset()
+        current_file.file().seek(offset_in_file)
 
-        for off, f in self.torrent.end_offsets():
-            # f: TorrentFile = f
-            if off <= start_offset:
-                continue
+        blocks = iter(p.get_downloaded_blocks())
+        current_block: Block = next(blocks)
 
-            else:
-                bytes_written = filler.send(f)
+        bbytes_written = 0
+        bytes_left_in_block = len(current_block.data())
+        bytes_left_in_file = current_file.length() - offset_in_file 
+
+        while bytes_written < p.length():
+            # Get a new block if we need data to write
+            assert bytes_left_in_block >= 0
+            if bytes_left_in_block == 0:
+                assert bbytes_written == len(current_block.data())
+                current_block = next(blocks)
+
+                bbytes_written = 0
+                bytes_left_in_block = len(current_block.data())
+            
+            # Get a new file if we've filled the last one
+            assert bytes_left_in_file >= 0
+            if bytes_left_in_file == 0:
+                current_file = next(out_files)
+                bytes_left_in_file = current_file.length()
+
+            # How many bytes can we write FROM this blk TO this file
+            bytes_to_write = min(bytes_left_in_block, bytes_left_in_file)
+
+            # Write it
+            bdata = current_block.data()
+            data_to_write = bdata[bbytes_written: bbytes_written + bytes_to_write]
+            current_file.file().write(data_to_write)
+
+            bytes_written += bytes_to_write  # Num bytes written of entire piece
+            bbytes_written += bytes_to_write  # Num bytes written of current block
+            bytes_left_in_block -= bytes_to_write  # Bytes still to write in current block
+            bytes_left_in_file -= bytes_to_write  # Bytes we can still write to current file
+
+    # def write(self, p: Piece):
+    #     assert p.complete()
+    #     assert p.verify()
+
+
+    #     start_offset = p.index * self.torrent.piece_length()
+    #     bytes_to_write = p.length
+    #     bytes_written = 0
+
+    #     filler = fill_file(p.get_downloaded_blocks(), start_offset)
+
+    #     for off, f in self.torrent.end_offsets():
+    #         # f: TorrentFile = f
+    #         if off <= start_offset:
+    #             continue
+
+    #         else:
+    #             bytes_written = filler.send(f)
         
-        return bytes_written
+    #     return bytes_written
 
 
 class PieceManager:
@@ -336,21 +392,23 @@ class PieceManager:
         self.finished_pieces = {}
         self.finished_pieces_bitfield: MutableBitfield = MutableBitfield(len(self.unfinished_pieces))
 
-    @staticmethod    
+    @staticmethod
     # def make_piece_dict(self, t: Torrent) -> dict[int, Piece]:
-    def make_piece_dict(self, t: Torrent) -> dict:
+    def make_piece_dict(t: Torrent) -> dict:
         '''Makes a map from piece_indices to pieces'''
-        length = self.torrent.download_length()
+        length = t.download_length
 
         pieces = {}
-        for index, piece in enumerate(t.pieces()):
+        for index, piece in enumerate(t.pieces):
             p = Piece(
                 index, 
                 checksum = piece,
-                length = self.t.piece_length()  
+                length = t.piece_length  
             )
 
             pieces[index] = p
+
+        return pieces
 
     def complete(self):
         if len(self.finished_pieces) == self.num_pieces:
@@ -405,5 +463,5 @@ class PieceManager:
             print('Block does not correspond to a valid piece.')
     
     def valid_piece_index(self, index: int) -> bool:
-        return 0 <= index < self.torrent.num_pieces()
+        return 0 <= index < self.torrent.num_pieces
 

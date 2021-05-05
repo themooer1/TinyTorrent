@@ -1,11 +1,16 @@
-from bencode import bencode, bdecode
+from abc import ABC, abstractmethod
 from collections import namedtuple
+from enum import Enum
 from hashlib import sha1
 from socket import inet_ntoa
 from struct import Struct
-from urllib import urlencode, urlopen
+from urllib.parse import urlencode, quote_from_bytes
+from urllib.request import urlopen
+from urllib.error import URLError
 
-from swarm import SwarmPeer, PeerFinder
+from bencode import bencode, bdecode
+
+# from swarm import SwarmPeer, PeerFinder
 from torrent import Torrent
 
 
@@ -14,10 +19,14 @@ Peer = namedtuple('Peer', ['id', 'host', 'port'])
 class PeerFinder(ABC):
 
     @abstractmethod
-    def get_peers(self) -> list[Peer]:
+    # def get_peers(self) -> list[Peer]:
+    def get_peers(self) -> list:
         pass
 
-class TrackerFailureException(Exception):
+class TrackerConnectionException(Exception):
+    pass
+
+class UnsupportedTrackerException(Exception):
     pass
  
 class TrackerEvent(Enum):
@@ -36,19 +45,25 @@ class Tracker(PeerFinder):
         self.host = listening_host
         self.port = listening_port
 
-    def get_peers(self, ):
-        info_hash = sha1(bencode(self.torrent.info())).digest
+        announce_url = self.torrent.announce
+        if not (announce_url.startswith('http://') or announce_url.startswith('https://')):
+            raise UnsupportedTrackerException(f'Tracker protocol not supported {announce_url}!')
 
-        r = TrackerRequest(
-            announce_url=self.torrent.announce_url(),
+        # Construct tracker HTTP request
+        info_hash = sha1(bencode(self.torrent.info)).digest()
+        self.r = TrackerRequest(
+            announce_url=self.torrent.announce,
             info_hash=info_hash,
             peer_id=self.pid,
-            ip=self.listening_host,
-            port=self.listening_port,
+            ip=self.host,
+            port=self.port,
             uploaded=0, 
             downloaded=0,
-            left=self.torrent.download_size()
+            left=self.torrent.download_length
         )
+
+    def get_peers(self):
+        return self.r.send()
 
 
 
@@ -61,6 +76,7 @@ class TrackerRequest:
     def __init__(self, announce_url, info_hash, peer_id, ip, port, uploaded, downloaded, left, event: TrackerEvent = None):
         self.announce_url = announce_url
         self.params = {
+            # 'info_hash': quote_from_bytes(info_hash),
             'info_hash': info_hash,
             'peer_id': peer_id,
             'ip': ip,
@@ -75,26 +91,43 @@ class TrackerRequest:
             self.params['event'] = event
 
     @classmethod
-    def decode_compact_response(cls, resp_data: bytes) -> list[Peer]:
-        if len(resp_data) % 6 != 0:
-            raise CompactResponseFormatError('resp could not be split into 6byte IP+PORT chunks!')
+    # def decode_compact_response(cls, resp_data: bytes) -> list[Peer]:
+    def decode_compact_response(cls, peers_str: bytes) -> list:
+        if len(peers_str) % 6 != 0:
+            raise CompactResponseFormatError('peer string could not be split into 6byte IP+PORT chunks!')
 
-        chunks = (resp_data[s:s + 6] for s in range(0, len(resp_data), 6))
+        chunks = (peers_str[s:s + 6] for s in range(0, len(peers_str), 6))
 
-        peers = [Peer(id='', ip = inet_ntoa(c[0:4]), port=cls.port_bspec.unpack(c[4:6])) for c in chunks]
+        peers = [Peer(id='', host = inet_ntoa(c[0:4]), port=cls.port_bspec.unpack(c[4:6])[0]) for c in chunks]
 
         return peers
         
+    @classmethod
+    def decode_response(cls, resp_data: bytes):
+        data = bdecode(resp_data)
+        peers = data['peers']
+        try:
+            return [Peer(p['peer id'], p['ip'], p['port']) for p in peers]
+        except TypeError as e:
+            # raise e
+            return cls.decode_compact_response(peers)
 
     def send(self):
-        eparams = urlencode(self.params).encode('utf-8')
+        eparams = urlencode(self.params)
         
-        with urlopen(self.announce_url, data=eparams) as resp:
-            rdata = resp.read().decode()
-            if self.params['compact'] == 0:
-                try:
-                    return [Peer(p['peer id'], p['ip'], p['port']) for p in bdecode(resp)['peers']]
-                except:
-                    return self.decode_compact_response(resp)
+        print(u'Connecting to tracker {}'.format(self.announce_url))
+        print(f'Params: {eparams}')
+        # print(eparams)
+        try:
+            with urlopen(self.announce_url + '?' + eparams, timeout=2) as resp:
+                rdata = resp.read()
+                return self.decode_response(rdata)
+                # with open('test/tracker_responses/ubuntu.resp', 'wb') as f:
+                #     f.write(rdata)
+                #     f.close()
+                
+        except URLError as e:
+            print(e)
+            raise TrackerConnectionException(f'Connection to {self.announce_url} failed!')
 
 

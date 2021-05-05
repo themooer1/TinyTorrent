@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from asyncio import coroutine, open_connection, Semaphore, sleep, StreamReader, StreamWriter
 
 from bitfield import MutableBitfield
-from packet import HandshakePacket, KeepalivePacket, ChokePacket, UnchokePacket, InterestedPacket, UninterestedPacket, HavePacket, BitfieldPacket, BlockPacket, RequestPacket, CancelPacket, read_handshake_response, read_next_packet, send_packet
+from packet import BittorrentPacket, HandshakePacket, KeepalivePacket, ChokePacket, UnchokePacket, InterestedPacket, UninterestedPacket, HavePacket, BitfieldPacket, BlockPacket, RequestPacket, CancelPacket, read_handshake_response, read_next_packet, send_packet
 from storage import Block, PieceManager, Request
 from tracker import Peer, PeerFinder
 from torrent import Torrent
@@ -24,9 +24,9 @@ class InfoHashDoesntMatchException(Exception):
 
 
 class SwarmPeer:
-    def __init__(self, swarm: Swarm, reader: StreamReader, writer: StreamWriter, choking=True, interested=False):
+    def __init__(self, swarm: "Swarm", reader: StreamReader, writer: StreamWriter, choking=True, interested=False):
         self.swarm = swarm
-        self.pid = pid # TODO: set this when connection is made
+        self.pid = pid # set when connection is made (self.connect())
         self.am_choking = choking
         self.am_interested = interested
         self.peer_choking = True
@@ -49,12 +49,14 @@ class SwarmPeer:
     def connect(self):
         pkt = HandshakePacket(self.peer_id(), self.swarm.torrent.info_hash())
         yield from self.send_packet(pkt)
-        resp: HandshakePacket = yield from read_handshake_response(self.reader)
+        resp = yield from read_handshake_response(self.reader)
         
+        self.peer_id = resp.peer_id()
+
         sent_info_hash = self.swarm.torrent.info_hash()
         recv_info_hash = resp.info_hash()
         if sent_info_hash != recv_info_hash:
-            raise InfoHashDoesntMatchException(f'Sent {}, but got {}')
+            raise InfoHashDoesntMatchException(f'Sent {sent_info_hash}, but got {recv_info_hash}')
 
 
     @coroutine
@@ -185,8 +187,10 @@ class Swarm:
     def __init__(self, torrent: Torrent, manager: PieceManager, finder: PeerFinder, piece_request_timeout = 5):
         self.my_pid = generate_peer_id()
         self.outstanding_requests = Semaphore(self.MAX_OUTSTANDING_REQUESTS)
-        self.peers: list[SwarmPeer] = finder.get_peers()
-        self.peers_not_choking_me: set[SwarmPeer] = set()
+        # self.peers: list[SwarmPeer] = finder.get_peers()
+        self.peers: list = finder.get_peers()
+        # self.peers_not_choking_me: set[SwarmPeer] = set()
+        self.peers_not_choking_me: set = set()
 
         self.piece_manager: PieceManager = manager
 
@@ -237,50 +241,57 @@ class Swarm:
 
     @coroutine
     def handle_incoming(self):
-        while self.running:
-            for peer, pkt in asyncio.gather((p.read_next_packet() for p in self.peers)):
-                peer: SwarmPeer = peer
-                if issubclass(pkt, KeepalivePacket):
-                    pass
+        @coroutine
+        def handle_peer_msgs(p: SwarmPeer):
+            while self.running:
+                peer, pkt = yield from p.read_next_packet()
+                self._handle_packet(peer, pkt)
+        
+        yield from asyncio.gather(handle_peer_msgs(p) for p in self.peers)
+
+    def _handle_packet(self, src_peer: SwarmPeer, pkt: BittorrentPacket):
+            # peer: SwarmPeer = peer
+            if issubclass(pkt, KeepalivePacket):
+                pass
 
 
-                # Handled by peer's read_next_packet
-                elif issubclass(pkt, ChokePacket):
-                    self.peers_not_choking_me.discard(peer)
-                
-                elif issubclass(pkt, UnchokePacket):
-                    self.peers_not_choking_me.add(peer)
-                                
-                # elif issubclass(pkt, InterestedPacket):
-                #     self.interested = True
+            # Handled by peer's read_next_packet
+            elif issubclass(pkt, ChokePacket):
+                self.peers_not_choking_me.discard(src_peer)
+            
+            elif issubclass(pkt, UnchokePacket):
+                self.peers_not_choking_me.add(src_peer)
+                            
+            # elif issubclass(pkt, InterestedPacket):
+            #     self.interested = True
 
-                # elif issubclass(pkt, UninterestedPacket):
-                #     self.interested = False
+            # elif issubclass(pkt, UninterestedPacket):
+            #     self.interested = False
 
-                # elif issubclass(pkt, HavePacket):
-                    # pass
-                # elif issubclass(pkt, BitfieldPacket):
-                    # pass
-                
-                elif issubclass(pkt, RequestPacket):
-                    if not peer.am_choking():
-                        if self.piece_manager.has_piece(pkt.request().index()):
-                            block = self.piece_manager.get_block(pkt.request())
-                            peer.send_block(block)
-                        else:
-                            # Refresh peer's knownledge of what we have
-                            # bfp = BitfieldPacket()
-                            pass
+            # elif issubclass(pkt, HavePacket):
+                # pass
+            # elif issubclass(pkt, BitfieldPacket):
+                # pass
+            
+            elif issubclass(pkt, RequestPacket):
+                if not src_peer.am_choking():
+                    if self.piece_manager.has_piece(pkt.request().index()):
+                        block = self.piece_manager.get_block(pkt.request())
+                        src_peer.send_block(block)
                     else:
-                        # Re-notify peer we are choking
-                        print(f'Peer {peer.peer_id()} requested data when choked.')
-                        peer.choke_and_notify()
-                
-                elif issubclass(pkt, BlockPacket):
-                    self.outstanding_requests.release()
-                    self.piece_manager.save_block(pkt.block())
-                    if self.piece_manager.has_piece(pkt.index()):
-                        yield from peer.send_have(pkt.index())
+                        # Refresh peer's knownledge of what we have
+                        # bfp = BitfieldPacket()
+                        pass
+                else:
+                    # Re-notify peer we are choking
+                    print(f'Peer {src_peer.peer_id()} requested data when choked.')
+                    src_peer.choke_and_notify()
+            
+            elif issubclass(pkt, BlockPacket):
+                self.outstanding_requests.release()
+                self.piece_manager.save_block(pkt.block())
+                if self.piece_manager.has_piece(pkt.index()):
+                    yield from src_peer.send_have(pkt.index())
 
 
     # @coroutine
@@ -313,21 +324,24 @@ class Swarm:
         yield from peer.send_packet(pkt)
 
     @coroutine
-    def handle_incomming_connections(self):
+    def handle_incoming_connections(self):
         yield from asyncio.start_server(self.accept_peer_connection, host=None, port=PEER_PORT)
 
 
-        
     @coroutine
     def start(self):
         '''Completes local files then seeds forever.'''
+        self.running = True
+
         yield from asyncio.gather(
-            self.handle_incomming(),
-            self.handle_incomming_connections(),
-            self.request_pieces()
+            self.handle_incoming(),
+            self.handle_incoming_connections(),
+            self.request_pieces(),
             self.send_keepalives_forever(),
         )
 
+    def stop(self):
+        self.running = False
 
 
         # TODO: 

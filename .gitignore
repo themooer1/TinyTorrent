@@ -1,3 +1,6 @@
 __pycache__/
 
 .hypothesis
+download/
+.DS_Store
+**.pyc

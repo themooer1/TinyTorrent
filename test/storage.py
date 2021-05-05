@@ -4,10 +4,11 @@ from hypothesis import given
 from hypothesis.strategies import binary, builds, composite, integers, one_of, sampled_from, text
 from hypothesis.core import SearchStrategy
 
-from storage import Request, Block, Piece
+from storage import Request, Block, Piece, BLOCK_LEN
 
-block_lengths = integers()
-piece_indices = integers(max_value=0xFFFFFFFF)
+block_lengths = integers(min_value=0)
+valid_block_lengths = sampled_from([0, BLOCK_LEN])
+piece_indices = integers(min_value=0, max_value=0xFFFFFFFF)
 piece_data = binary()
 
 @composite
@@ -28,7 +29,7 @@ def piece_and_blocks_pairs(draw):
     nxt_blk_off = 0
 
     while nxt_blk_off < len(data):
-        nxt_blk_len = min(draw(block_lengths), len(data) - nxt_blk_off)
+        nxt_blk_len = min(draw(valid_block_lengths), len(data) - nxt_blk_off)
         b = Block(
             piece_index=p.index,
             begin_offset=nxt_blk_off,
@@ -46,6 +47,7 @@ def test_fill_piece(piece_and_blocks):
 
     p: Piece = p
 
+
     for b in blks:
         assert not p.complete()
         assert not p.verify()
@@ -56,8 +58,12 @@ def test_fill_piece(piece_and_blocks):
     assert p.verify()
     
     p.reset()
-    assert not p.complete()
-    assert not p.verify()
+
+    assert p.num_blocks >= 0
+    
+    if p.num_blocks > 0:
+        assert not p.complete()
+        assert not p.verify()
 
 
 

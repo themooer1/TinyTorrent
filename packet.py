@@ -373,7 +373,7 @@ def read_next_packet(reader: StreamReader):
         raise MalformedPacketException(e)
 
 @coroutine
-def read_handshake_response(reader: StreamReader):
+def read_handshake_response(reader: StreamReader) -> HandshakePacket:
     handshake_resp_bytes = yield from reader.readexactly(len(HandshakePacket))
     handshake_resp = HandshakePacket.deserialize(handshake_resp_bytes)
 
