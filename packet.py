@@ -32,7 +32,16 @@ class HandshakePacket:
     bspec = Struct('!B19sQ20s20s')
 
     def __init__(self, info_hash: bytes, peer_id, reserved=0):
-        assert len(info_hash) == len(peer_id) == 20
+        try: 
+            assert len(info_hash) == 20 
+            assert len(peer_id) == 20
+        except AssertionError as e:
+            print(f'info hash: {info_hash}')
+            print(f'info hash len: {len(info_hash)}')
+            print(f'peer id: {peer_id}')
+            print(f'peer id len: {len(peer_id)}')
+            raise e
+
         self._info_hash = info_hash
         self._peer_id = bytes(peer_id, encoding='utf8') if isinstance(peer_id, str) else peer_id
 
@@ -43,6 +52,10 @@ class HandshakePacket:
 
     def __len__(self):
         return self.bspec.size
+
+    @classmethod
+    def size(cls):
+        return cls.bspec.size
 
     def __repr__(self):
         return f'HandshakePacket(\n\tinfo_hash={self.info_hash()},\n\tpeer_id={self.peer_id()}\n)'
@@ -374,7 +387,7 @@ def read_next_packet(reader: StreamReader):
 
 @coroutine
 def read_handshake_response(reader: StreamReader) -> HandshakePacket:
-    handshake_resp_bytes = yield from reader.readexactly(len(HandshakePacket))
+    handshake_resp_bytes = yield from reader.readexactly(HandshakePacket.size())
     handshake_resp = HandshakePacket.deserialize(handshake_resp_bytes)
 
     return handshake_resp

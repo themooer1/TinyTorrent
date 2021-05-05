@@ -127,6 +127,10 @@ class Torrent:
         return self.__piece_hashes
 
     @property
+    def num_pieces(self):
+        return len(self.__piece_hashes)
+
+    @property
     def info(self):
         return self.__info
     

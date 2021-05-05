@@ -4,11 +4,11 @@ import random
 
 from tracker import Tracker
 from storage import PieceIO, PieceManager
-from swarm import Swarm
+from swarm import Swarm, PEER_PORT as PORT
 from torrent import Torrent
 
 HOST = 'mooblek.com'
-PORT = 1955
+# PORT = 1955
 PEER_ID = 'OceanC2222-XXXX-YYYY'
 PEER_ID_LEN = 20
 
