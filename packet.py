@@ -11,9 +11,10 @@ from storage import Block, Request
 class MalformedPacketException(ValueError):
     pass
 
+
 class BittorrentPacketType(Enum):
     HANDSHAKE = -2
-    KEEPALIVE = -1 # No type sent, length 0
+    KEEPALIVE = -1  # No type sent, length 0
     CHOKE = 0
     UNCHOKE = 1
     INTERESTED = 2
@@ -21,9 +22,10 @@ class BittorrentPacketType(Enum):
     HAVE = 4
     BITFIELD = 5
     REQUEST = 6
-    BLOCK = 7  #bep_0003 calls this a 'piece' but 
+    BLOCK = 7  # bep_0003 calls this a 'piece' but
     CANCEL = 8
     EXTENDED = 14
+
 
 # Special packet only sent once at beginning
 class HandshakePacket:
@@ -32,8 +34,8 @@ class HandshakePacket:
     bspec = Struct('!B19sQ20s20s')
 
     def __init__(self, info_hash: bytes, peer_id, reserved=0):
-        try: 
-            assert len(info_hash) == 20 
+        try:
+            assert len(info_hash) == 20
             assert len(peer_id) == 20
         except AssertionError as e:
             print(f'info hash: {info_hash}')
@@ -75,7 +77,7 @@ class HandshakePacket:
             print(plen)
             print(plen)
             raise MalformedPacketException('HandshakePacket did not start with "\\x19Bittorrent protocol"')
-        
+
         return HandshakePacket(
             info_hash,
             peer_id
@@ -83,6 +85,7 @@ class HandshakePacket:
 
     def serialize(self) -> bytes:
         return self.brepr + self._info_hash + self._peer_id
+
 
 class BittorrentPacketHeader:
     bspec = Struct('!LB')
@@ -92,7 +95,7 @@ class BittorrentPacketHeader:
     def __init__(self, length, ptype: BittorrentPacketType):
         self.length = length
         self.ptype = ptype
-    
+
     def __eq__(self, other):
         if isinstance(other, type(self)):
             return self.length == other.length and self.type() == other.type()
@@ -102,9 +105,12 @@ class BittorrentPacketHeader:
     def __len__(cls):
         return cls.len_bspec.size + cls.type_bspec.size
 
-    
     def __repr__(self):
         return f'{self.__class__.__name__}(\n\tlength={self.body_length() + 1}\n\tbody_length={self.body_length()},\n\ttype={self.type()}\n)'
+
+    @classmethod
+    def size(cls):
+        return cls.bspec.size
 
     def serialize(self) -> bytes:
         self.bspec.pack(self.length, self.type().value)
@@ -112,7 +118,7 @@ class BittorrentPacketHeader:
     @classmethod
     def deserialize(cls, buf: bytes):
         length, = cls.len_bspec.unpack_from(buf)
-        
+
         if length == 0:
             ptype = BittorrentPacketType.KEEPALIVE
         else:
@@ -122,13 +128,13 @@ class BittorrentPacketHeader:
             length,
             BittorrentPacketType(ptype)
         )
-    
+
     def body_length(self):
         return self.length - 1  # Exclude pkt type byte
 
     def type(self):
         return self.ptype
-    
+
 
 class BittorrentPacket:
     @abstractmethod
@@ -145,15 +151,17 @@ class BittorrentPacket:
         return self.bspec.size
 
 
+
+
 def SingletonPacket(name: str, packet_type: BittorrentPacketType, byte_repr: bytes):
     byte_repr_len = len(byte_repr)
 
-        
     singleton_pkt_class = type(
         name,
         (BittorrentPacket,),  # TODO: consider adding SingletonPacket as parent class
         {
             '__len__': lambda *args: byte_repr_len,  # *args allow len(cls) and len(instance)
+            'size': lambda *args: byte_repr_len,
             '__str__': lambda self: self.__class__.__name__,
             'type': packet_type,
             'serialize': lambda self: byte_repr,
@@ -179,7 +187,7 @@ def SingletonPacket(name: str, packet_type: BittorrentPacketType, byte_repr: byt
 def NoPayloadPacket(name: str, packet_type: BittorrentPacketType):
     if packet_type.value > 255:
         raise ValueError(f'Packet type {packet_type} cannot fit into one byte!')
-    
+
     return SingletonPacket(name, packet_type=packet_type, byte_repr=pack('!LB', 1, packet_type.value))
 
 
@@ -189,10 +197,10 @@ def NoPayloadPacket(name: str, packet_type: BittorrentPacketType):
 KeepalivePacket = SingletonPacket('KeepalivePacket', BittorrentPacketType.KEEPALIVE, b'\x00' * 4)
 
 # Choke:: length: 1, type: 0
-ChokePacket = NoPayloadPacket(name='ChokePacket', packet_type=BittorrentPacketType.CHOKE) 
+ChokePacket = NoPayloadPacket(name='ChokePacket', packet_type=BittorrentPacketType.CHOKE)
 
 # Unchoke:: length: 1, type: 1
-UnchokePacket = NoPayloadPacket(name='UnchokePacket', packet_type=BittorrentPacketType.UNCHOKE) 
+UnchokePacket = NoPayloadPacket(name='UnchokePacket', packet_type=BittorrentPacketType.UNCHOKE)
 
 # Interested:: length: 1, type: 0
 InterestedPacket = NoPayloadPacket(name='InterestedPacket', packet_type=BittorrentPacketType.INTERESTED)
@@ -217,7 +225,6 @@ class HavePacket(BittorrentPacket):
             return self.completed_piece_index == other.completed_piece_index
         return False
 
-
     def piece_index(self):
         return self.completed_piece_index
 
@@ -225,12 +232,14 @@ class HavePacket(BittorrentPacket):
         return self.bspec.pack(self.body_bspec.size + 1, self.type.value, self.completed_piece_index)
 
     @classmethod
+    def size(cls):
+        return cls.bspec.size
+
+    @classmethod
     def deserialize(cls, buf: bytes) -> "HavePacket":
         piece_index, = cls.body_bspec.unpack_from(buf)
 
         return cls(piece_index)
-    
-        
 
 
 class BitfieldPacket(BittorrentPacket):
@@ -250,16 +259,15 @@ class BitfieldPacket(BittorrentPacket):
 
     def __len__(self):
         return self.bspec.size + self.bitfield().num_bytes()
-    
+
     def bitfield(self) -> Bitfield:
         return self.b
 
     def serialize(self):
         return self.bspec.pack(self.bitfield().num_bytes() + 1, self.type.value) + bytes(self.bitfield())
-    
+
     @classmethod
     def deserialize(cls, buf: bytes) -> "BitfieldPacket":
-
         return cls(bitfield=buf)
 
 
@@ -270,10 +278,10 @@ class RequestPacket(BittorrentPacket):
 
     def __init__(self, r: Request):
         self.req: Request = r
-    
+
     def __repr__(self):
         return f'{self.__class__.__name__}(\n\tr={repr(self.request())}\n)'
-    
+
     def __eq__(self, other):
         if isinstance(other, self.__class__):
             return self.req == other.req
@@ -287,7 +295,7 @@ class RequestPacket(BittorrentPacket):
             self.req.begin_offset(),
             self.req.length()
         )
-    
+
     @classmethod
     def deserialize(cls, buf: bytes) -> "RequestPacket":
         piece_index, begin_offset, piece_length = cls.body_bspec.unpack(buf)
@@ -298,7 +306,7 @@ class RequestPacket(BittorrentPacket):
 
     def request(self) -> Request:
         return self.req
-    
+
 
 class BlockPacket(BittorrentPacket):
     type = BittorrentPacketType.BLOCK
@@ -307,10 +315,10 @@ class BlockPacket(BittorrentPacket):
 
     def __init__(self, b: Block):
         self.b: Block = b
-    
+
     def __repr__(self):
         return f'BlockPacket(\n\tb={repr(self.block())}\n)'
-    
+
     def __eq__(self, other):
         if isinstance(other, self.__class__):
             return self.b == other.b
@@ -326,7 +334,7 @@ class BlockPacket(BittorrentPacket):
             self.b.index(),
             self.b.begin_offset(),
         ) + self.b.data()
-    
+
     @classmethod
     def deserialize(cls, buf: bytes) -> "PiecePacket":
         piece_index, begin_offset = cls.body_bspec.unpack_from(buf)
@@ -346,7 +354,6 @@ class CancelPacket(RequestPacket):
 
 class ExtendedPacket(BittorrentPacket):
     type = BittorrentPacketType.EXTENDED
-    
 
 
 # PACKETS_BY_TYPE: dict[BittorrentPacketType, BittorrentPacket] = {
@@ -364,15 +371,13 @@ PACKETS_BY_TYPE = {
     BittorrentPacketType.CANCEL: CancelPacket
 }
 
+
 @coroutine
 def read_next_packet(reader: StreamReader):
-
     try:
         # Read header to get length
-        header_bytes = yield from reader.readexactly(len(BittorrentPacketHeader))
+        header_bytes = yield from reader.readexactly(BittorrentPacketHeader.size())
         header: BittorrentPacketHeader = BittorrentPacketHeader.deserialize(header_bytes)
-
-
 
         # Read inner packet
         pkt_len = header.body_length()
@@ -385,16 +390,17 @@ def read_next_packet(reader: StreamReader):
         print(e)
         raise MalformedPacketException(e)
 
+
 @coroutine
 def read_handshake_response(reader: StreamReader) -> HandshakePacket:
     handshake_resp_bytes = yield from reader.readexactly(HandshakePacket.size())
     handshake_resp = HandshakePacket.deserialize(handshake_resp_bytes)
 
     return handshake_resp
-    
+
 
 @coroutine
-def send_packet(writer: StreamWriter, packet: BittorrentPacket):
+def send_packet(writer: StreamWriter, packet: Union[BittorrentPacket, HandshakePacket]):
     writer.write(packet.serialize())
     yield from writer.drain()
 
@@ -409,7 +415,6 @@ def self_test():
     u = UnchokePacket()
     u2 = UnchokePacket()
 
-
     assert u is u2
     assert u.serialize() == b'\x00\x00\x00\x01\x01'
 
@@ -417,7 +422,7 @@ def self_test():
     assert HavePacket.type == BittorrentPacketType.HAVE
     assert ExtendedPacket.type == BittorrentPacketType.EXTENDED
 
-    expected_bits = [1, 1, 1, 1, 0, 0, 0, 1,] + ([0] * 8) + ([1] + [0] * 6 + [1])
+    expected_bits = [1, 1, 1, 1, 0, 0, 0, 1, ] + ([0] * 8) + ([1] + [0] * 6 + [1])
     b = Bitfield(b'\xF1\x00\x81')
 
     assert b.get(0) == 1
@@ -441,6 +446,7 @@ def self_test():
         assert actual_bits == expected_bits
 
     print('Self test succeeded!')
+
 
 if __name__ == '__main__':
     self_test()
