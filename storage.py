@@ -111,7 +111,7 @@ class Piece:
         self.length = length
 
         self.num_blocks = length // BLOCK_LEN
-        last_block_len = length % BLOCK_LEN or BLOCK_LEN
+        last_block_len = length % BLOCK_LEN
         if last_block_len > 0:
             self.num_blocks += 1
 
@@ -169,9 +169,10 @@ class Piece:
 
     def block_completed(self, begin_offset: int) -> bool:
         assert begin_offset % BLOCK_LEN == 0
-        block_index = begin_offset >> BLOCK_EXP
+        # block_index = begin_offset >> BLOCK_EXP
 
-        return block_index in self.completed_blocks
+        # return block_index in self.completed_blocks
+        return begin_offset in self.completed_blocks
 
     def complete(self):
         """True if all blocks have been downloaded.  ¡DOES NOT VERIFY PIECE HASH!"""
@@ -302,7 +303,7 @@ class PieceIO:
             fbytes_to_read = min(bytes_to_read, f.length)
 
             f.file.seek(fstart_offset)
-            bytes_read.extend(f.file().read(fbytes_to_read))
+            bytes_read.extend(f.file.read(fbytes_to_read))
 
             bytes_to_read -= fbytes_to_read
 

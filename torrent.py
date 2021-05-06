@@ -19,7 +19,7 @@ class TorrentFile:
         self.__path = os.path.join(self.DOWNLOAD_SUBDIR, path)
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
 
-        self.__file = open(self.path, 'wb')
+        self.__file = open(self.path, 'w+b')
 
     def __close__(self):
         self.file.close()

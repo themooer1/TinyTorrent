@@ -44,7 +44,33 @@ def simulate_piece_io(test_dir):
 
         assert mgr.complete()
 
-        assert os.system(f'diff -r download/ piece_io_files/ground_truth/{test_dir}') == 0
+        #                           vvv I'm looking at you .DS_Store :/
+        assert os.system(f'diff -x \'.*\' -r download/ piece_io_files/ground_truth/{test_dir}') == 0
+
+        r = Request(
+            piece_index=0,
+            begin_offset=2,
+            length=5
+        )
+        block_from_pieceio = mgr.get_block(r)
+        correct_block = make_block_for_request(r, torrent, torrent_data)
+
+        print(block_from_pieceio)
+        print(correct_block)
+        assert block_from_pieceio == correct_block
+
+        if test_dir == 'torrent3':
+            r = Request(
+                piece_index=2,
+                begin_offset=2,
+                length=30000
+            )
+            block_from_pieceio = mgr.get_block(r)
+            correct_block = make_block_for_request(r, torrent, torrent_data)
+
+            # print(block_from_pieceio)
+            # print(correct_block)
+            assert block_from_pieceio == correct_block
 
     finally:
         os.system('rm -rf download/*')
