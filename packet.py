@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from asyncio import coroutine, StreamReader, StreamWriter
+from asyncio import coroutine, StreamReader, StreamWriter, IncompleteReadError
 from enum import Enum
 from struct import calcsize, pack, unpack, Struct
 from typing import Union
@@ -9,6 +9,13 @@ from storage import Block, Request
 
 
 class MalformedPacketException(ValueError):
+    pass
+
+class PeerDisconnected(Exception):
+    pass
+
+class PeerError(Exception):
+    """For when a Bittorrent peer does someting fishy"""
     pass
 
 
@@ -149,8 +156,6 @@ class BittorrentPacket:
     # @abstractmethod
     def __len__(self):
         return self.bspec.size
-
-
 
 
 def SingletonPacket(name: str, packet_type: BittorrentPacketType, byte_repr: bytes):
@@ -386,14 +391,29 @@ def read_next_packet(reader: StreamReader):
 
         return next_packet
 
+    except IncompleteReadError:
+        raise PeerDisconnected()
+
+    except ValueError as e:
+        print(e)
+        try:
+            print(header)
+        except:
+            print('header was not defined')
+
     except Exception as e:
         print(e)
-        raise MalformedPacketException(e)
+
+        # raise e
 
 
 @coroutine
 def read_handshake_response(reader: StreamReader) -> HandshakePacket:
-    handshake_resp_bytes = yield from reader.readexactly(HandshakePacket.size())
+    try:
+        handshake_resp_bytes = yield from reader.readexactly(HandshakePacket.size())
+    except (ConnectionResetError, IncompleteReadError):
+        raise PeerDisconnected()
+
     handshake_resp = HandshakePacket.deserialize(handshake_resp_bytes)
 
     return handshake_resp
@@ -402,7 +422,11 @@ def read_handshake_response(reader: StreamReader) -> HandshakePacket:
 @coroutine
 def send_packet(writer: StreamWriter, packet: Union[BittorrentPacket, HandshakePacket]):
     writer.write(packet.serialize())
-    yield from writer.drain()
+
+    try:
+        yield from writer.drain()
+    except ConnectionError:
+        raise PeerDisconnected()
 
 
 def self_test():

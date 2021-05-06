@@ -3,13 +3,13 @@ import random
 import time
 
 from abc import ABC, abstractmethod
-from asyncio import coroutine, open_connection, Semaphore, sleep, StreamReader, StreamWriter
+from asyncio import coroutine, open_connection, Semaphore, sleep, StreamReader, StreamWriter, IncompleteReadError
 from typing import Union
 
 from bitfield import MutableBitfield
 from packet import BittorrentPacket, HandshakePacket, KeepalivePacket, ChokePacket, UnchokePacket, InterestedPacket, \
     UninterestedPacket, HavePacket, BitfieldPacket, BlockPacket, RequestPacket, CancelPacket, read_handshake_response, \
-    read_next_packet, send_packet
+    read_next_packet, send_packet, PeerError, PeerDisconnected
 from storage import Block, PieceManager, Request
 from tracker import Peer, PeerFinder
 from torrent import Torrent
@@ -18,7 +18,7 @@ PEER_PORT = 1955
 
 
 def generate_peer_id() -> bytes:
-    '''Generates a random 20 byte peer ID'''
+    """Generates a random 20 byte peer ID"""
     return ('OceanC' + ''.join(random.choices('1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ', k=14))).encode()
 
 
@@ -27,42 +27,43 @@ class InfoHashDoesntMatchException(Exception):
 
 
 class NoPeersException(Exception):
-    '''When there aren't yet peers to download from'''
+    """When there aren't yet peers to download from"""
     pass
 
 
 class SwarmPeer:
     def __init__(self, swarm: "Swarm", reader: StreamReader, writer: StreamWriter, choking=True, interested=False):
         self.swarm = swarm
-        self.pid = b'UNNAMED_PEER01234569'  # set when connection is made (self.connect())
-        self.am_choking = choking
-        self.am_interested = interested
-        self.peer_choking = True
-        self.peer_interested = False
-        self.reader = reader
-        self.writer = writer
+        self.__pid = b'UNNAMED_PEER01234569'  # set when connection is made (self.connect())
+        self.__am_choking = choking
+        self.__am_interested = interested
+        self.__peer_choking = True
+        self.__peer_interested = False
+        self.__reader = reader
+        self.__writer = writer
 
-        self.last_seen = time.time()
+        self.__last_seen = time.time()
 
         num_pieces = swarm.torrent.num_pieces
-        self.bitfield = MutableBitfield(bytearray(num_pieces))
+        self.__bitfield = MutableBitfield(bytearray(num_pieces))
 
         # Stops eternal coroutines
         self.running = True
 
     def peer_id(self):
-        return self.pid
+        return self.__pid
 
     def __del__(self):
-        self.writer.close()
+        self.__writer.close()
 
     @coroutine
     def connect(self):
         pkt = HandshakePacket(self.swarm.torrent.info_hash, self.swarm.my_pid)
         yield from self.send_packet(pkt)
-        resp: HandshakePacket = yield from read_handshake_response(self.reader)
+        # resp: HandshakePacket = yield from read_handshake_response(self.reader)
+        resp = yield from read_handshake_response(self.__reader)
 
-        self.pid = resp.peer_id()
+        self.__pid = resp.peer_id()
 
         sent_info_hash = self.swarm.torrent.info_hash
         recv_info_hash = resp.info_hash()
@@ -71,9 +72,10 @@ class SwarmPeer:
 
     @coroutine
     def accept_connection(self):
-        incoming_handshake: HandshakePacket = yield from read_handshake_response(self.reader)
+        # incoming_handshake: HandshakePacket = yield from read_handshake_response(self.reader)
+        incoming_handshake = yield from read_handshake_response(self.__reader)
 
-        self.pid = incoming_handshake.peer_id()
+        self.__pid = incoming_handshake.peer_id()
 
         my_info_hash = self.swarm.torrent.info_hash
         incoming_handshake_info_hash = incoming_handshake.info_hash()
@@ -92,7 +94,7 @@ class SwarmPeer:
         yield from self.send_packet(pkt)
 
     def choke(self):
-        self.choke = True
+        self.__am_choking = True
 
     @coroutine
     def unchoke_and_notify(self):
@@ -102,7 +104,7 @@ class SwarmPeer:
         yield from self.send_packet(pkt)
 
     def unchoke(self):
-        self.unchoke = True
+        self.__am_choking = True
 
     @coroutine
     def take_interest_and_notify(self):
@@ -112,7 +114,7 @@ class SwarmPeer:
         yield from self.send_packet(pkt)
 
     def take_interest(self):
-        self.am_interested = True
+        self.__am_interested = True
 
     @coroutine
     def remove_interest_and_notify(self):
@@ -122,26 +124,26 @@ class SwarmPeer:
         yield from self.send_packet(pkt)
 
     def remove_interest(self):
-        self.am_interested = False
+        self.__am_interested = False
 
     def am_choking(self):
-        '''Are WE choking the peer'''
-        return self.am_choking
+        """Are WE choking the peer"""
+        return self.__am_choking
 
     def peer_choking(self):
-        '''Is the PEER choking us'''
-        return self.peer_choking
+        """Is the PEER choking us"""
+        return self.__peer_choking
 
     def am_interested(self):
-        '''Is the peer interested in our data'''
-        return self.am_interested
+        """Is the peer interested in our data"""
+        return self.__am_interested
 
     def peer_interested(self):
-        '''Is the PEER interested in our data'''
-        return self.peer_interested
+        """Is the PEER interested in our data"""
+        return self.__peer_interested
 
     def has_piece(self, index: int) -> bool:
-        return self.bitfield.get(index)
+        return self.__bitfield.get(index)
 
     @coroutine
     def request_piece(self, r: Request):
@@ -163,38 +165,38 @@ class SwarmPeer:
 
     @coroutine
     def send_packet(self, pkt: Union[BittorrentPacket, HandshakePacket]):
-        yield from send_packet(self.writer, pkt)
+        yield from send_packet(self.__writer, pkt)
 
     @coroutine
     def read_next_packet(self):
-        '''Returns (self, next_pkt_for_this_peer)'''
-        pkt = yield from read_next_packet(self.reader)
+        """Returns (self, next_pkt_for_this_peer)"""
+        pkt = yield from read_next_packet(self.__reader)
 
-        self.last_seen = time.time()
+        self.__last_seen = time.time()
 
         # Process if we can
         if isinstance(pkt, KeepalivePacket):
             pass
 
         elif isinstance(pkt, ChokePacket):
-            self.peer_choking = True
+            self.__peer_choking = True
 
         elif isinstance(pkt, UnchokePacket):
-            self.peer_choking = False
+            self.__peer_choking = False
 
         elif isinstance(pkt, InterestedPacket):
-            self.peer_interested = True
+            self.__peer_interested = True
 
         elif isinstance(pkt, UninterestedPacket):
-            self.peer_interested = False
+            self.__peer_interested = False
 
         elif isinstance(pkt, HavePacket):
-            self.bitfield.set(pkt.piece_index())
+            self.__bitfield.set(pkt.piece_index())
 
         elif isinstance(pkt, BitfieldPacket):
             # Bitfields allocate to the nearest byte
             assert 0 <= len(pkt.bitfield()) - self.swarm.torrent.num_pieces < 8
-            self.bitfield = MutableBitfield(pkt.bitfield())
+            self.__bitfield = MutableBitfield(pkt.bitfield())
 
         # hand off to swarm's read_next_packet
         return self, pkt
@@ -202,7 +204,7 @@ class SwarmPeer:
 
 class Swarm:
     MAX_ACTIVE_PEERS = 30
-    MAX_OUTSTANDING_REQUESTS = 30
+    MAX_OUTSTANDING_REQUESTS = 300
 
     def __init__(self, torrent: Torrent, manager: PieceManager, finder: PeerFinder, piece_request_timeout=2):
         self.running = False
@@ -225,21 +227,37 @@ class Swarm:
     def torrent(self):
         return self.__torrent
 
+    def disconnect(self, p: Peer):
+        self.peers_not_choking_me.remove(p)
+        self.peers.remove(p)
+
     @coroutine
     def find_peers(self):
-        # connect_tasks = [self.connect_to_peer(p.host, p.port) for p in self.finder.get_peers()]
-        # yield from asyncio.gather(*connect_tasks)
-
-        for p in self.finder.get_peers():
+        @coroutine
+        def safe_connect(p: Peer):
             try:
                 yield from self.connect_to_peer(p.host, p.port)
                 print(f'Connected to peer {p.host}:{p.port}')
                 print(f'I now have {len(self.peers)} peers.')
                 print(f'{len(self.peers_not_choking_me)} peers have unchoked me.')
 
-            except (ConnectionRefusedError, asyncio.TimeoutError) as e:
+            except (PeerError, PeerDisconnected, IncompleteReadError, ConnectionRefusedError, asyncio.TimeoutError) as e:
                 print(type(e))
                 print(f'Could not connect to peer {p.host}:{p.port}')
+
+        connect_tasks = [safe_connect(p) for p in self.finder.get_peers()]
+        yield from asyncio.gather(*connect_tasks)
+
+        # for p in self.finder.get_peers():
+        #     try:
+        #         yield from self.connect_to_peer(p.host, p.port)
+        #         print(f'Connected to peer {p.host}:{p.port}')
+        #         print(f'I now have {len(self.peers)} peers.')
+        #         print(f'{len(self.peers_not_choking_me)} peers have unchoked me.')
+        #
+        #     except (PeerError, PeerDisconnected, IncompleteReadError, ConnectionRefusedError, asyncio.TimeoutError) as e:
+        #         print(type(e))
+        #         print(f'Could not connect to peer {p.host}:{p.port}')
 
     @coroutine
     def connect_to_peer(self, host, port):
@@ -248,7 +266,6 @@ class Swarm:
         p = SwarmPeer(self, reader, writer)
         yield from p.connect()
         yield from p.take_interest_and_notify()
-
         self.peers.append(p)
 
     def peers_with_piece(self, piece_index: int):
@@ -275,14 +292,18 @@ class Swarm:
                 yield from asyncio.sleep(1)
                 peer_to_ask: SwarmPeer = self.random_peer_with_piece(request.index())
 
-            yield from peer_to_ask.request_piece(request)
-
             try:
-                yield from asyncio.wait_for(self.outstanding_requests.acquire(), timeout=self.request_timeout)
+                yield from peer_to_ask.request_piece(request)
 
-            except asyncio.TimeoutError:
-                # Consider all outstanding requests timed out
-                self.reset_outstanding_requests()
+                try:
+                    yield from asyncio.wait_for(self.outstanding_requests.acquire(), timeout=self.request_timeout)
+
+                except asyncio.TimeoutError:
+                    # Consider all outstanding requests timed out
+                    self.reset_outstanding_requests()
+
+            except (PeerDisconnected, PeerError):
+                self.disconnect(peer_to_ask)
 
         assert self.piece_manager.complete()
         exit(0)
@@ -292,17 +313,21 @@ class Swarm:
         @coroutine
         def handle_peer_msgs(p: SwarmPeer):
             while self.running:
-                peer, pkt = yield from p.read_next_packet()
-                self._handle_packet(peer, pkt)
+                try:
+                    peer, pkt = yield from p.read_next_packet()
+                    yield from self._handle_packet(peer, pkt)
+                except PeerDisconnected as e:
+                    print(e)
+                    break
 
         peer_handler_tasks = [handle_peer_msgs(p) for p in self.peers]
         yield from asyncio.gather(*peer_handler_tasks)
 
+    @coroutine
     def _handle_packet(self, src_peer: SwarmPeer, pkt: BittorrentPacket):
         # peer: SwarmPeer = peer
         if isinstance(pkt, KeepalivePacket):
             pass
-
 
         # Handled by peer's read_next_packet
         elif isinstance(pkt, ChokePacket):
@@ -350,7 +375,7 @@ class Swarm:
 
     @coroutine
     def send_keepalives_forever(self):
-        '''Send keepalives to all peers once every 100 seconds'''
+        """Send keepalives to all peers once every 100 seconds"""
         pkt = KeepalivePacket()
         while self.running:
             yield from asyncio.sleep(100)
@@ -366,10 +391,10 @@ class Swarm:
         )
 
         try:
-            yield from peer.accept_connection()
+            yield from asyncio.wait_for(peer.accept_connection(), timeout=10)
             self.peers.append(peer)
 
-        except InfoHashDoesntMatchException as e:
+        except (PeerDisconnected, InfoHashDoesntMatchException, asyncio.TimeoutError) as e:
             print(e)
 
         # SwarmPeer's __del__ will close the writer
@@ -380,7 +405,7 @@ class Swarm:
 
     @coroutine
     def start(self):
-        '''Completes local files then seeds forever.'''
+        """Completes local files then seeds forever."""
         self.running = True
 
         yield from self.find_peers()

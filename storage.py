@@ -460,6 +460,9 @@ class PieceManager:
                 while r is not None:
                     yield r
                     r = piece.next_request()
+                print('Getting next piece!')
+                print(f'Moving on from {piece.index}')
+                # print(piece)
 
     def save_block(self, b: Block):
         idx = b.index()
@@ -472,12 +475,16 @@ class PieceManager:
                 if piece.verify():
                     self.mark_finished(piece)
                     self.io.write(piece)
+                    print(f'Piece {idx} finished!')
+                    print(f'Have {len(self.finished_pieces)} of {self.num_pieces()} pieces.')
                 else:
                     print(f'Piece {piece.index} failed verification!  Resetting...')
                     piece.reset()
 
         else:
-            print('Block does not correspond to a valid piece.')
+            # print('Block does not correspond to a valid piece.')
+            # print(b)
+            pass
 
     def valid_piece_index(self, index: int) -> bool:
         return 0 <= index < self.torrent.num_pieces

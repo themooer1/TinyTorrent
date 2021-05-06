@@ -2,11 +2,10 @@ from math import ceil
 from typing import Union
 
 
-
 class Bitfield:
     def __init__(self, bitfield: bytes):
         self._bitfield = bitfield
-        self._num_set = None
+        self._num_set = sum(self)
 
     def __eq__(self, other):
         if isinstance(other, self.__class__):
@@ -17,7 +16,7 @@ class Bitfield:
 
     def get(self, index):
         return (self._bitfield[index // 8] >> (7 - (index % 8))) & 1
-    
+
     def num_bytes(self):
         return len(self._bitfield)
 
@@ -29,7 +28,7 @@ class Bitfield:
 
     def __bytes__(self):
         return self._bitfield
-    
+
     def __iter__(self):
         for i in range(0, len(self._bitfield)):
             yield self._bitfield[i] >> 7 & 1
@@ -43,6 +42,7 @@ class Bitfield:
 
     def __len__(self):
         return len(self._bitfield) * 8
+
 
 # class ChainedBitfield(Bitfield):
 #     def __init__(self, bf1: Bitfield, bf2: Bitfield):
@@ -62,7 +62,7 @@ class Bitfield:
 #     def __iter__(self):
 #         yield from self.bf1
 #         yield from self.bf2
-    
+
 #     def __len__(self):
 #         len(self.bf1) + len(self.bf2)
 
@@ -71,21 +71,23 @@ class MutableBitfield(Bitfield):
     def __init__(self, bitfield: Union[int, bytes, bytearray, Bitfield]):
         if type(bitfield) is int:
             self._bitfield = bytearray(ceil(bitfield / 8))
-        if type(bitfield) is bytes:
+        elif type(bitfield) is bytes:
             self._bitfield = bytearray(bitfield)
         elif type(bitfield) is Bitfield:
             self._bitfield = bytearray(bitfield._bitfield)
         else:
             self._bitfield = bitfield
 
+        self._num_set = sum(self)
+
     def __bytes__(self):
         return bytes(self._bitfield)
-    
+
     def set(self, index):
         if self.get(index) == 0:
             self._num_set += 1
         self._bitfield[index // 8] |= 1 << (index % 8)
-    
+
     def unset(self, index):
         if self.get(index) == 1:
             self._num_set -= 1
