@@ -86,7 +86,7 @@ class MutableBitfield(Bitfield):
     def set(self, index):
         if self.get(index) == 0:
             self._num_set += 1
-        self._bitfield[index // 8] |= 1 << (index % 8)
+        self._bitfield[index // 8] |= 1 << (7 - (index % 8))
 
     def unset(self, index):
         if self.get(index) == 1:

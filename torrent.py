@@ -11,15 +11,20 @@ class MalformedTorrentException(Exception):
 
 
 class TorrentFile:
-    DOWNLOAD_SUBDIR = 'download/'
 
-    def __init__(self, length: int, offset: int, path: str):
+    def __init__(self, length: int, offset: int, path: str, download_dir: str):
         self.__length = length
         self.__offset = offset
-        self.__path = os.path.join(self.DOWNLOAD_SUBDIR, path)
+        self.__path = os.path.join(download_dir, path)
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
 
-        self.__file = open(self.path, 'w+b')
+        try:
+            self.__file = open(self.path, 'r+b')
+            self.__file.seek(0)
+        except FileNotFoundError:
+            self.__file = open(self.path, 'w+b')
+
+        self.__file.truncate(self.length)
 
     def __close__(self):
         self.file.close()
@@ -54,7 +59,8 @@ class TorrentFile:
 
 
 class Torrent:
-    def __init__(self, filename):
+    def __init__(self, filename, download_dir):
+        self.download_dir = download_dir
         with open(filename, 'rb') as f:
             torrent_d = bdecode(f)
             print(f'Opening {filename}')
@@ -83,6 +89,7 @@ class Torrent:
                     length=self.__length,
                     offset=0,
                     path=file_name,
+                    download_dir=self.download_dir
                 )
 
                 self.__files.append((0, f))
@@ -98,7 +105,8 @@ class Torrent:
                     f = TorrentFile(
                         length=file_length,
                         offset=self.__length,
-                        path=file_name
+                        path=file_name,
+                        download_dir=self.download_dir
                     )
 
                     # self.__files[f.offset // self.piece_length] = f

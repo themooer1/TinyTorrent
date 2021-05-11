@@ -167,6 +167,9 @@ class Piece:
 
         return requests
 
+    def all_requests(self) -> list:
+        return self._create_request_list()
+
     def block_completed(self, begin_offset: int) -> bool:
         assert begin_offset % BLOCK_LEN == 0
         # block_index = begin_offset >> BLOCK_EXP
@@ -288,7 +291,13 @@ class PieceIO:
     #             return block
 
     def get_block(self, r: Request) -> Block:
-        assert r.begin_offset() <= BLOCK_LEN
+        assert r.length() <= BLOCK_LEN
+        # if not (r.begin_offset() <= BLOCK_LEN):
+        #     print(r.begin_offset())
+        #     print(r.length())
+        #     print(BLOCK_LEN)
+        #     assert r.begin_offset() <= BLOCK_LEN
+
         start_offset = r.index() * self.torrent.piece_length + r.begin_offset()
 
         bytes_to_read = r.length()
@@ -428,6 +437,15 @@ class PieceManager:
 
         return pieces
 
+    def load_exiting_pieces(self):
+        for p in list(self.unfinished_pieces.values()):
+            # p: Piece = p
+            for r in p.all_requests():
+                # r: Request = r
+                b = self.io.get_block(r)
+                self.save_block(b)
+        print()
+
     def complete(self):
         if len(self.finished_pieces) == self.num_pieces():
             assert len(self.unfinished_pieces) == 0
@@ -445,6 +463,7 @@ class PieceManager:
 
         del self.unfinished_pieces[p.index]
         self.finished_pieces[p.index] = p
+        self.finished_pieces_bitfield.set(p.index)
 
     def num_pieces(self):
         return self.torrent.num_pieces
@@ -462,6 +481,27 @@ class PieceManager:
                     r = piece.next_request()
                 print('Getting next piece!')
                 print(f'Moving on from {piece.index}')
+                # print(piece)
+
+    def requests2(self):
+        """ Generates requests needed to finish all pieces"""
+
+        def chunks(l, n):
+            return (l[i:i+n] for i in range(0, len(l), n))
+
+        while len(self.unfinished_pieces) > 0:
+            # For now, just finish one piece at a time
+            for pieces in chunks(list(self.unfinished_pieces.values()), 100):  # (mark_finished removes piece from unfinished_pieces)
+                # piece: Piece = piece
+
+                rs = [p.next_request() for p in pieces]
+                while any(rs):
+                    for r in rs:
+                        if r:
+                            yield r
+                    rs = [p.next_request() for p in pieces]
+                print('Getting more pieces!')
+                # print(f'moving on from {piece.index}')
                 # print(piece)
 
     def save_block(self, b: Block):

@@ -13,8 +13,8 @@ from bencode import bencode, bdecode
 # from swarm import SwarmPeer, PeerFinder
 from torrent import Torrent
 
-
 Peer = namedtuple('Peer', ['id', 'host', 'port'])
+
 
 class PeerFinder(ABC):
 
@@ -23,12 +23,28 @@ class PeerFinder(ABC):
     def get_peers(self) -> list:
         pass
 
+
 class TrackerConnectionException(Exception):
     pass
 
+
 class UnsupportedTrackerException(Exception):
     pass
- 
+
+
+class DummyTracker(PeerFinder):
+    """
+    A peer finder that just returns a single peer for testing
+    or demonstrating P2P seeding.
+    """
+
+    def __init__(self, p: Peer):
+        self.__p = p
+
+    def get_peers(self) -> list:
+        return [self.__p]
+
+
 class TrackerEvent(Enum):
     STARTED = 'started'
     COMPLETED = 'completed'
@@ -57,7 +73,7 @@ class Tracker(PeerFinder):
             peer_id=self.pid,
             ip=self.host,
             port=self.port,
-            uploaded=0, 
+            uploaded=0,
             downloaded=0,
             left=self.torrent.download_length
         )
@@ -66,14 +82,15 @@ class Tracker(PeerFinder):
         return self.r.send()
 
 
-
-
 class CompactResponseFormatError(ValueError):
     pass
 
+
 class TrackerRequest:
     port_bspec = Struct('!H')
-    def __init__(self, announce_url, info_hash, peer_id, ip, port, uploaded, downloaded, left, event: TrackerEvent = None):
+
+    def __init__(self, announce_url, info_hash, peer_id, ip, port, uploaded, downloaded, left,
+                 event: TrackerEvent = None):
         self.announce_url = announce_url
         self.params = {
             # 'info_hash': quote_from_bytes(info_hash),
@@ -98,10 +115,10 @@ class TrackerRequest:
 
         chunks = (peers_str[s:s + 6] for s in range(0, len(peers_str), 6))
 
-        peers = [Peer(id='', host = inet_ntoa(c[0:4]), port=cls.port_bspec.unpack(c[4:6])[0]) for c in chunks]
+        peers = [Peer(id='', host=inet_ntoa(c[0:4]), port=cls.port_bspec.unpack(c[4:6])[0]) for c in chunks]
 
         return peers
-        
+
     @classmethod
     def decode_response(cls, resp_data: bytes):
         data = bdecode(resp_data)
@@ -114,7 +131,7 @@ class TrackerRequest:
 
     def send(self):
         eparams = urlencode(self.params)
-        
+
         print(u'Connecting to tracker {}'.format(self.announce_url))
         print(f'Params: {eparams}')
         # print(eparams)
@@ -125,9 +142,7 @@ class TrackerRequest:
                 # with open('test/tracker_responses/ubuntu.resp', 'wb') as f:
                 #     f.write(rdata)
                 #     f.close()
-                
+
         except URLError as e:
             print(e)
             raise TrackerConnectionException(f'Connection to {self.announce_url} failed!')
-
-

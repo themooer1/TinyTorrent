@@ -4,3 +4,4 @@ __pycache__/
 download/
 .DS_Store
 **.pyc
+/mac_venv/

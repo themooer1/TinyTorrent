@@ -11,8 +11,10 @@ from storage import Block, Request
 class MalformedPacketException(ValueError):
     pass
 
+
 class PeerDisconnected(Exception):
     pass
+
 
 class PeerError(Exception):
     """For when a Bittorrent peer does someting fishy"""
@@ -401,8 +403,8 @@ def read_next_packet(reader: StreamReader):
         except:
             print('header was not defined')
 
-    except Exception as e:
-        print(e)
+    # except Exception as e:
+    #     print(e)
 
         # raise e
 
