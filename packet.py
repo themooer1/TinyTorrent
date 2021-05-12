@@ -427,7 +427,7 @@ def send_packet(writer: StreamWriter, packet: Union[BittorrentPacket, HandshakeP
 
     try:
         yield from writer.drain()
-    except ConnectionError:
+    except (BrokenPipeError, ConnectionError):
         raise PeerDisconnected()
 
 

@@ -77,7 +77,6 @@ class SwarmPeer:
 
         incoming_handshake = yield from read_handshake_response(self.__reader)
 
-
         self.__pid = incoming_handshake.peer_id()
 
         my_info_hash = self.swarm.torrent.info_hash
@@ -170,6 +169,12 @@ class SwarmPeer:
         yield from self.send_packet(pkt)
 
     @coroutine
+    def send_cancel(self, r: Request):
+        pkt = CancelPacket(r)
+
+        yield from self.send_packet(pkt)
+
+    @coroutine
     def send_packet(self, pkt: Union[BittorrentPacket, HandshakePacket]):
         yield from send_packet(self.__writer, pkt)
 
@@ -221,6 +226,7 @@ class Swarm:
 
         self.finder = finder
         self.outstanding_requests = Semaphore(self.MAX_OUTSTANDING_REQUESTS)
+        self.outstanding_requests_d = dict()
         # self.peers: list[SwarmPeer] = finder.get_peers()
         self.peers: list = []
         # self.peers_not_choking_me: set[SwarmPeer] = set()
@@ -253,7 +259,8 @@ class Swarm:
                     print(f'{len(self.peers_not_choking_me)} peers have unchoked me.')
 
                 except (
-                PeerError, PeerDisconnected, IncompleteReadError, ConnectionRefusedError, asyncio.TimeoutError) as e:
+                        PeerError, PeerDisconnected, IncompleteReadError, ConnectionRefusedError,
+                        asyncio.TimeoutError) as e:
                     print(type(e))
                     print(f'Could not connect to peer {p.host}:{p.port}')
 
@@ -310,6 +317,11 @@ class Swarm:
 
             try:
                 yield from peer_to_ask.request_piece(request)
+
+                # End Game Mode
+                o = self.outstanding_requests_d.get(request) or []
+                o.append(peer_to_ask)
+                self.outstanding_requests_d[request] = o
 
                 try:
                     # print('waiting to send more requests')
@@ -390,7 +402,19 @@ class Swarm:
             self.outstanding_requests.release()
             self.piece_manager.save_block(pkt.block())
             if self.piece_manager.has_piece(pkt.block().index()):
-                yield from src_peer.send_have(pkt.block().index())
+                for peer in self.peers:
+                    asyncio.ensure_future(peer.send_have(pkt.block().index()))
+
+            # End Game Mode
+            b = pkt.block()
+            r = Request(b.index(), b.begin_offset(), len(b.data()))
+            ps = self.outstanding_requests_d.get(r)
+            if ps:
+                for p in ps:
+                    # p: SwarmPeer = p
+                    if p != src_peer:
+                        asyncio.ensure_future(p.send_cancel(r))
+            self.outstanding_requests_d.pop(r)
 
     # @coroutine
     # def send_haves(self, p: Block):
@@ -420,7 +444,8 @@ class Swarm:
             self.peers.append(peer)
             asyncio.ensure_future(self.handle_peer_msgs(peer))
 
-        except (PeerDisconnected, ConnectionResetError, MalformedPacketException, InfoHashDoesntMatchException, asyncio.TimeoutError) as e:
+        except (PeerDisconnected, ConnectionResetError, MalformedPacketException, InfoHashDoesntMatchException,
+                asyncio.TimeoutError) as e:
             print(e)
             print(f'Disconnecting from peer, {peer.peer_id()}')
             writer.close()
