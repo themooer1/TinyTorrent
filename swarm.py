@@ -414,7 +414,7 @@ class Swarm:
                     # p: SwarmPeer = p
                     if p != src_peer:
                         asyncio.ensure_future(p.send_cancel(r))
-            self.outstanding_requests_d.pop(r)
+            self.outstanding_requests_d.pop(r, None)
 
     # @coroutine
     # def send_haves(self, p: Block):
